@@ -27,62 +27,6 @@ FMP_URL = "https://financialmodelingprep.com/stable/economic-calendar"
 # 讲话类关键词（英文标题检测）
 SPEECH_KEYWORDS = ["Speech", "Testimony", "Remarks", "Press Conference", "Hearing"]
 
-# 中英对照字典（常见美国宏观事件翻译）
-TRANSLATION_DICT = {
-    # 数据类
-    "CPI m/m": "消费者物价指数月率",
-    "Core CPI m/m": "核心消费者物价指数月率",
-    "CPI y/y": "消费者物价指数年率",
-    "Core CPI y/y": "核心消费者物价指数年率",
-    "Nonfarm Payrolls": "非农就业人数",
-    "Unemployment Rate": "失业率",
-    "Retail Sales m/m": "零售销售月率",
-    "Core Retail Sales m/m": "核心零售销售月率",
-    "PPI m/m": "生产者物价指数月率",
-    "Core PPI m/m": "核心生产者物价指数月率",
-    "ISM Manufacturing PMI": "ISM制造业PMI",
-    "ISM Services PMI": "ISM服务业PMI",
-    "Industrial Production m/m": "工业生产月率",
-    "Capacity Utilization": "产能利用率",
-    "Housing Starts": "房屋开工",
-    "Building Permits": "建筑许可",
-    "Existing Home Sales": "成屋销售",
-    "Michigan Consumer Sentiment": "密歇根大学消费者信心指数",
-    "GDP Growth Rate q/q": "GDP季率初值",
-    "Durable Goods Orders": "耐用品订单月率",
-    "Initial Jobless Claims": "初请失业金人数",
-    "Continuing Jobless Claims": "续请失业金人数",
-    "Trade Balance": "贸易差额",
-    "Current Account": "经常账户",
-    "FOMC Rate Decision": "FOMC利率决定",
-    "Fed Funds Rate": "联邦基金利率",
-    
-    # 讲话类
-    "Fed Chair Powell Speech": "美联储主席鲍威尔讲话",
-    "Fed Chair Powell Testimony": "美联储主席鲍威尔证词",
-    "FOMC Press Conference": "FOMC新闻发布会",
-    "Fed Governor Speech": "美联储理事讲话",
-    "Fed Vice Chair Speech": "美联储副主席讲话",
-    "FOMC Minutes": "FOMC会议纪要",
-    
-    # 其他
-    "Consumer Confidence": "消费者信心指数",
-    "JOLTs Job Openings": "JOLTs职位空缺",
-    "Factory Orders": "工厂订单月率",
-    "ISM Non-Manufacturing PMI": "ISM非制造业PMI"
-}
-
-# 中文星期映射（简写版）
-WEEKDAY_MAP = {
-    'Monday': '周一',
-    'Tuesday': '周二',
-    'Wednesday': '周三',
-    'Thursday': '周四',
-    'Friday': '周五',
-    'Saturday': '周六',
-    'Sunday': '周日'
-}
-
 # 星级映射 (FMP 用 "High" = ★★★, "Medium" = ★★, "Low" = ★)
 IMPACT_MAP = {"Low": 1, "Medium": 2, "High": 3}
 
@@ -101,14 +45,9 @@ def save_settings():
     with open(SETTINGS_FILE, 'w') as f:
         json.dump(settings, f, indent=4)
 
-def translate_title(title):
-    """翻译标题：优先字典匹配，否则返回原标题"""
-    # 移除括号参考期 e.g., "CPI m/m (Oct/25)" -> "CPI m/m"
+def clean_title(title):
+    """移除括号参考期 e.g., "CPI m/m (Oct/25)" -> "CPI m/m" """
     title = re.sub(r'\s*\([^)]*\)', '', title).strip()
-    lower_title = title.lower()
-    for eng, chi in TRANSLATION_DICT.items():
-        if eng.lower() in lower_title:
-            return title.replace(eng, chi, 1)
     return title
 
 def fetch_us_events(target_date_str, min_importance=2):
@@ -132,34 +71,35 @@ def fetch_us_events(target_date_str, min_importance=2):
             imp_str = item.get("impact", "Low")
             imp_num = IMPACT_MAP.get(imp_str.capitalize(), 1)
             if imp_num < min_importance: continue
-            title = item.get("event", "").strip()
-            translated_title = translate_title(title)
-            key = translated_title.lower()  # 去重键（标题小写）
-            if key not in events or item.get("date") > events[key]['date']:  # 取最新参考期
-                importance = "★" * imp_num
+            importance = "★" * imp_num
 
-                dt_str = item.get("date", "")  # YYYY-MM-DD HH:MM:SS
-                time_str = dt_str.split()[-1] if ' ' in dt_str else ""
-                date_only = dt_str.split()[0] if ' ' in dt_str else dt_str
-                try:
-                    if time_str:
-                        et_dt = ET.localize(datetime.datetime.strptime(f"{date_only} {time_str}", "%Y-%m-%d %H:%M:%S"))
-                    else:
-                        et_dt = ET.localize(datetime.datetime.strptime(date_only, "%Y-%m-%d"))
-                    bjt_dt = et_dt.astimezone(BJT)
-                    time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} UTC+8)"
-                except:
-                    time_display = f"{date_only} 全天 ET (时间转换失败)"
+            event_title = clean_title(item.get("event", "").strip())  # 移除参考期，无翻译
 
-                events[key] = {
-                    "time": time_display,
-                    "importance": importance,
-                    "title": translated_title,
-                    "forecast": item.get("estimate", "") or "—",
-                    "previous": item.get("previous", "") or "—",
-                    "orig_title": title,
-                    "date": item.get("date", "")  # 用于去重排序
-                }
+            dt_str = item.get("date", "")  # YYYY-MM-DD HH:MM:SS
+            time_str = dt_str.split()[-1] if ' ' in dt_str else ""
+            date_only = dt_str.split()[0] if ' ' in dt_str else dt_str
+            try:
+                if time_str:
+                    et_dt = ET.localize(datetime.datetime.strptime(f"{date_only} {time_str}", "%Y-%m-%d %H:%M:%S"))
+                else:
+                    et_dt = ET.localize(datetime.datetime.strptime(date_only, "%Y-%m-%d"))
+                bjt_dt = et_dt.astimezone(BJT)
+                time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} UTC+8)"
+            except:
+                time_display = f"{date_only} 全天 ET (时间转换失败)"
+
+            event = {
+                "time": time_display,
+                "importance": importance,
+                "title": event_title,
+                "forecast": item.get("estimate", "") or "—",
+                "previous": item.get("previous", "") or "—",
+                "orig_title": item.get("event", "").strip()
+            }
+            # 去重：取最新（按日期字符串排序，取最大）
+            key = event_title.lower()  # 标题小写作为键
+            if key not in events or item.get("date", "") > events[key]['date']:
+                events[key] = event
         # 转为列表，按时间排序
         event_list = sorted(events.values(), key=lambda x: x["time"])
         return event_list
