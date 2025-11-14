@@ -20,8 +20,8 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 ET = pytz.timezone('America/New_York')
 BJT = pytz.timezone('Asia/Shanghai')
 
-# FMP API
-FMP_URL = "https://financialmodelingprep.com/api/v3/economic_calendar"
+# FMP Stable API
+FMP_URL = "https://financialmodelingprep.com/stable/economic-calendar"
 
 # 讲话类关键词（英文标题检测）
 SPEECH_KEYWORDS = ["Speech", "Testimony", "Remarks", "Press Conference", "Hearing"]
