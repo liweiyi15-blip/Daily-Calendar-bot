@@ -162,9 +162,10 @@ def format_calendar(events, target_date_str, min_importance):
     for i, e in enumerate(events, 1):
         is_speech = any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS)
         field_name = f"{e['time']} **{e['title']}**"
-        field_value = f"\n**Impact: {e['importance']}**\n\n"
-        if not is_speech:
-            field_value = f"\n**Impact: {e['importance']}**\nF: {e['forecast']} | P: {e['previous']}\n\n"
+        if is_speech:
+            field_value = f"\n**Impact: {e['importance']}**\n\n\n"
+        else:
+            field_value = f"\n**Impact: {e['importance']}**\nF: {e['forecast']} | P: {e['previous']}\n\n\n"
         embed.add_field(name=field_name, value=field_value, inline=False)
     
     return [embed]
