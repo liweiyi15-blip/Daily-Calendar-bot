@@ -150,26 +150,22 @@ def format_calendar(events, target_date_str, min_importance):
     try:
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
     except ValueError:
-        return "**Invalid date format (use YYYY-MM-DD)**"
-    target_dt = datetime.datetime.combine(target_date, datetime.time(0, 0), tzinfo=ET)
-    weekday_en = target_dt.strftime('%A')
-    weekday_cn = WEEKDAY_MAP.get(weekday_en, weekday_en)
+        embed = discord.Embed(title="News Today", description="Invalid date format (use YYYY-MM-DD)", color=0x00FF00)
+        return [embed]
     
     if not events:
-        return f"**{target_date_str} ({weekday_cn}) No US economic events ({min_importance}★ or above)**"
+        embed = discord.Embed(title="News Today", description=f"No events ({'★' * min_importance} or above)", color=0x00FF00)
+        return [embed]
     
-    embed = discord.Embed(title=f"{target_date_str} ({weekday_cn}) US Macro Economic Calendar", color=0x00FF00)
-    embed.description = "Filtered US Medium+ Impact Events"
+    embed = discord.Embed(title="News Today", color=0x00FF00)
     
     for i, e in enumerate(events, 1):
         is_speech = any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS)
         field_name = f"{e['time']} **{e['title']}**"
-        field_value = f"\n**{e['importance']}**"
+        field_value = f"\n**rank: {e['importance']}**"
         if not is_speech:
             field_value += f"\nF: {e['forecast']} | P: {e['previous']}"
         embed.add_field(name=field_name, value=field_value, inline=False)
-    
-    embed.set_footer(text="Data from FMP API. Actuals not updated.")
     
     return [embed]
 
