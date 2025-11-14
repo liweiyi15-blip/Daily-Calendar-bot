@@ -6,42 +6,42 @@ import datetime
 import pytz
 import json
 import os
-import re  # 用于去括号
+import re  # for removing parentheses
 
-# ================== 配置区 ==================
+# ================== Configuration ==================
 TOKEN = os.getenv('TOKEN') or 'YOUR_BOT_TOKEN_HERE'  # Discord Token
 FMP_KEY = os.getenv('FMP_KEY') or 'your_fmp_key_here'  # FMP API Key (Railway Variables)
-SETTINGS_FILE = 'settings.json'  # 持久化设置文件
+SETTINGS_FILE = 'settings.json'  # Persistent settings file
 
 intents = discord.Intents.default()
-intents.message_content = True  # 启用消息内容
+intents.message_content = True  # Enable message content
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# 时区
+# Timezones
 ET = pytz.timezone('America/New_York')
 BJT = pytz.timezone('Asia/Shanghai')
 
 # FMP Stable API
 FMP_URL = "https://financialmodelingprep.com/stable/economic-calendar"
 
-# 讲话类关键词（英文标题检测）
+# Speech keywords (English title detection)
 SPEECH_KEYWORDS = ["Speech", "Testimony", "Remarks", "Press Conference", "Hearing"]
 
-# 中文星期映射（简写版）
+# English weekday mapping
 WEEKDAY_MAP = {
-    'Monday': '周一',
-    'Tuesday': '周二',
-    'Wednesday': '周三',
-    'Thursday': '周四',
-    'Friday': '周五',
-    'Saturday': '周六',
-    'Sunday': '周日'
+    'Monday': 'Monday',
+    'Tuesday': 'Tuesday',
+    'Wednesday': 'Wednesday',
+    'Thursday': 'Thursday',
+    'Friday': 'Friday',
+    'Saturday': 'Saturday',
+    'Sunday': 'Sunday'
 }
 
-# 星级映射 (FMP 用 "High" = ★★★, "Medium" = ★★, "Low" = ★)
+# Impact mapping (FMP "High" = ★★★, "Medium" = ★★, "Low" = ★)
 IMPACT_MAP = {"Low": 1, "Medium": 2, "High": 3}
 
-# 全局设置（per-guild，支持多服务器）
+# Global settings (per-guild, supports multiple servers)
 settings = {}  # {guild_id: {'channel_id': int, 'min_importance': 2}}
 
 def load_settings():
@@ -57,16 +57,16 @@ def save_settings():
         json.dump(settings, f, indent=4)
 
 def clean_title(title):
-    """移除括号参考期 e.g., "CPI m/m (Oct/25)" -> "CPI m/m" """
+    """Remove parentheses reference period e.g., "CPI m/m (Oct/25)" -> "CPI m/m" """
     title = re.sub(r'\s*\([^)]*\)', '', title).strip()
     return title
 
 def fetch_us_events(target_date_str, min_importance=2):
-    """拉取指定日期的美国事件（YYYY-MM-DD 格式）"""
+    """Fetch US events for the specified date (YYYY-MM-DD format)"""
     try:
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
     except ValueError:
-        return []  # 无效日期返回空
+        return []  # Invalid date return empty
     params = {
         "from": target_date_str,
         "to": target_date_str,
@@ -78,15 +78,17 @@ def fetch_us_events(target_date_str, min_importance=2):
         data_json = response.json()
         events = {}
         for item in data_json:
-            if item.get("country") != "US": continue  # 只美国
+            if item.get("country") != "US": continue  # Only US
             imp_str = item.get("impact", "Low")
             imp_num = IMPACT_MAP.get(imp_str.capitalize(), 1)
             if imp_num < min_importance: continue
             importance = "★" * imp_num
 
-            event_title = clean_title(item.get("event", "").strip())  # 移除参考期
+            event_title = clean_title(item.get("event", "").strip())  # Remove reference period
 
             dt_str = item.get("date", "")  # YYYY-MM-DD HH:MM:SS
+            if not dt_str:
+                continue  # Skip events without date
             time_str = dt_str.split()[-1] if ' ' in dt_str else ""
             date_only = dt_str.split()[0] if ' ' in dt_str else dt_str
             try:
@@ -96,8 +98,9 @@ def fetch_us_events(target_date_str, min_importance=2):
                     et_dt = ET.localize(datetime.datetime.strptime(date_only, "%Y-%m-%d"))
                 bjt_dt = et_dt.astimezone(BJT)
                 time_display = f"{bjt_dt.strftime('%H:%M')} ({et_dt.strftime('%H:%M')} ET)"
-            except:
-                time_display = f"全天 ({date_only})"
+            except ValueError as ve:
+                print(f"Time parsing error: {ve}, dt_str: {dt_str}")
+                time_display = f"All Day ({date_only})"
 
             event = {
                 "time": time_display,
@@ -106,21 +109,21 @@ def fetch_us_events(target_date_str, min_importance=2):
                 "forecast": item.get("estimate", "") or "—",
                 "previous": item.get("previous", "") or "—",
                 "orig_title": item.get("event", "").strip(),
-                "date": item.get("date", "")  # 用于去重排序
+                "date": dt_str  # For de-duplication sorting
             }
-            # 去重：取最新（按日期字符串排序，取最大）
-            key = event_title.lower()  # 标题小写作为键
-            if key not in events or item.get("date", "") > events[key]['date']:
+            # De-duplicate: take the latest (by date string, take max)
+            key = event_title.lower()  # Title lowercase as key
+            if key not in events or dt_str > events[key]['date']:
                 events[key] = event
-        # 转为列表，按时间排序
+        # Convert to list, sort by time
         event_list = sorted(events.values(), key=lambda x: x["time"])
         return event_list
     except Exception as e:
-        print(f"API 错误: {e}")
+        print(f"API Error: {e}")
         return []
 
-def split_message(message, max_length=1900):  # 留 100 字符裕度
-    """分割长消息为多消息"""
+def split_message(message, max_length=1900):  # Leave 100 char buffer
+    """Split long message into multiple messages"""
     if len(message) <= max_length:
         return [message]
     parts = []
@@ -132,7 +135,7 @@ def split_message(message, max_length=1900):  # 留 100 字符裕度
                 parts.append(current.strip())
                 current = line + '\n'
             else:
-                # 太长单行，强制切
+                # Too long single line, force cut
                 parts.append(line[:max_length])
                 current = line[max_length:] + '\n'
         else:
@@ -145,38 +148,38 @@ def format_calendar(events, target_date_str, min_importance):
     try:
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
     except ValueError:
-        return "**无效日期格式 (用 YYYY-MM-DD)**"
+        return "**Invalid date format (use YYYY-MM-DD)**"
     target_dt = datetime.datetime.combine(target_date, datetime.time(0, 0), tzinfo=ET)
     weekday_en = target_dt.strftime('%A')
     weekday_cn = WEEKDAY_MAP.get(weekday_en, weekday_en)
     
     if not events:
-        return f"**{target_date_str} ({weekday_cn}) 无美国经济事件（{min_importance}★ 或以上）**"
+        return f"**{target_date_str} ({weekday_cn}) No US economic events ({min_importance}★ or above)**"
     
-    lines = [f"**{target_date_str} ({weekday_cn}) 美国宏观经济日历**"]
+    lines = [f"**{target_date_str} ({weekday_cn}) US Macro Economic Calendar**"]
     for e in events:
         lines.append(f"\n{e['time']} **{e['title']}** {e['importance']}")
         
         if not any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS):
-            lines.append(f"   预测: {e['forecast']} | 前值: {e['previous']}")
+            lines.append(f"   Forecast: {e['forecast']} | Previous: {e['previous']}")
     
     message = "\n".join(lines)
-    return split_message(message)  # 返回列表，如果长则拆分
+    return split_message(message)  # Return list if long, split
 
 class SaveChannelView(discord.ui.View):
-    """按钮视图：确认保存频道"""
+    """Button view: Confirm save channel"""
     def __init__(self, guild_id: str, channel_id: int):
-        super().__init__(timeout=300)  # 5 分钟超时
+        super().__init__(timeout=300)  # 5 minute timeout
         self.guild_id = guild_id
         self.channel_id = channel_id
 
-    @discord.ui.button(label="设为默认频道", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Set as Default Channel", style=discord.ButtonStyle.primary)
     async def save_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.guild_id not in settings:
             settings[self.guild_id] = {}
         settings[self.guild_id]['channel_id'] = self.channel_id
         save_settings()
-        await interaction.response.send_message("已保存为默认频道！下次推送会自动发这里。", ephemeral=True)
+        await interaction.response.send_message("Saved as default channel! Future pushes will go here.", ephemeral=True)
         self.stop()
 
 @tasks.loop(hours=24)
@@ -189,13 +192,13 @@ async def daily_push():
             continue
         channel = guild.get_channel(guild_settings['channel_id'])
         if not channel:
-            print(f"Guild {guild_id} 频道未找到")
+            print(f"Guild {guild_id} channel not found")
             continue
 
         messages = format_calendar(fetch_us_events(tomorrow_str, guild_settings['min_importance']), tomorrow_str, guild_settings['min_importance'])
         for msg in messages:
             await channel.send(msg)
-        print(f"Guild {guild_id} 已推送 {len(fetch_us_events(tomorrow_str, guild_settings['min_importance']))} 条事件")
+        print(f"Guild {guild_id} pushed {len(fetch_us_events(tomorrow_str, guild_settings['min_importance']))} events")
 
 @daily_push.before_loop
 async def before_push():
@@ -204,37 +207,37 @@ async def before_push():
     if next_run <= now:
         next_run += datetime.timedelta(days=1)
     wait_seconds = (next_run - now).total_seconds()
-    print(f"等待 {wait_seconds/3600:.1f} 小时后，于美东 00:00 推送...")
+    print(f"Waiting {wait_seconds/3600:.1f} hours for ET 00:00 push...")
     await discord.utils.sleep_until(next_run)
 
 @bot.event
 async def on_ready():
     load_settings()
-    print(f'Bot 已上线: {bot.user}')
+    print(f'Bot online: {bot.user}')
     if not daily_push.is_running():
         daily_push.start()
     try:
         synced = await bot.tree.sync()
-        print(f"已同步 {len(synced)} 个斜杠命令")
+        print(f"Synced {len(synced)} slash commands")
     except Exception as e:
-        print(f"同步命令失败: {e}")
+        print(f"Command sync failed: {e}")
 
-# 斜杠命令组
-@bot.tree.command(name="set_channel", description="设置推送频道（当前频道）")
+# Slash Commands
+@bot.tree.command(name="set_channel", description="Set push channel (current channel)")
 async def set_channel(interaction: discord.Interaction):
     guild_id = str(interaction.guild_id)
     if guild_id not in settings:
         settings[guild_id] = {}
     settings[guild_id]['channel_id'] = interaction.channel_id
     save_settings()
-    await interaction.response.send_message(f"已设置推送频道为: {interaction.channel.mention}", ephemeral=True)
+    await interaction.response.send_message(f"Set push channel to: {interaction.channel.mention}", ephemeral=True)
 
-@bot.tree.command(name="set_importance", description="设置最小重要性 (1=★, 2=★★, 3=★★★)")
-@discord.app_commands.describe(level="最小星级 (1-3)")
+@bot.tree.command(name="set_importance", description="Set minimum importance (1=★, 2=★★, 3=★★★)")
+@discord.app_commands.describe(level="Minimum star level (1-3)")
 @discord.app_commands.choices(level=[
-    discord.app_commands.Choice(name="★ (所有)", value=1),
-    discord.app_commands.Choice(name="★★ (中高)", value=2),
-    discord.app_commands.Choice(name="★★★ (高)", value=3)
+    discord.app_commands.Choice(name="★ (All)", value=1),
+    discord.app_commands.Choice(name="★★ (Medium-High)", value=2),
+    discord.app_commands.Choice(name="★★★ (High)", value=3)
 ])
 async def set_importance(interaction: discord.Interaction, level: discord.app_commands.Choice[int]):
     guild_id = str(interaction.guild_id)
@@ -242,12 +245,12 @@ async def set_importance(interaction: discord.Interaction, level: discord.app_co
         settings[guild_id] = {}
     settings[guild_id]['min_importance'] = level.value
     save_settings()
-    await interaction.response.send_message(f"已设置最小重要性为 {level.name} (数值: {level.value})", ephemeral=True)
+    await interaction.response.send_message(f"Set minimum importance to {level.name} (value: {level.value})", ephemeral=True)
 
-@bot.tree.command(name="test_push", description="手动测试推送明日日历")
+@bot.tree.command(name="test_push", description="Manual test push tomorrow's calendar")
 async def test_push(interaction: discord.Interaction):
     guild_id = str(interaction.guild_id)
-    channel_id = interaction.channel_id  # 默认当前频道
+    channel_id = interaction.channel_id  # Default to current channel
     temp_use = False
     if guild_id not in settings or 'channel_id' not in settings[guild_id]:
         temp_use = True
@@ -264,15 +267,15 @@ async def test_push(interaction: discord.Interaction):
         await channel.send(msg)
     if temp_use:
         view = SaveChannelView(guild_id, channel_id)
-        await interaction.response.send_message(f"已临时用当前频道推送！{channel.mention}\n想设为默认吗？", view=view, ephemeral=True)
+        await interaction.response.send_message(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=view, ephemeral=True)
     else:
-        await interaction.response.send_message(f"测试推送已发送到 {channel.mention}", ephemeral=True)
+        await interaction.response.send_message(f"Test push sent to {channel.mention}", ephemeral=True)
 
-@bot.tree.command(name="test_date", description="测试指定日期的日历 (YYYY-MM-DD)")
-@discord.app_commands.describe(date="测试日期 (e.g., 2025-11-14)")
+@bot.tree.command(name="test_date", description="Test calendar for specific date (YYYY-MM-DD)")
+@discord.app_commands.describe(date="Test date (e.g., 2025-11-14)")
 async def test_date(interaction: discord.Interaction, date: str):
     guild_id = str(interaction.guild_id)
-    channel_id = interaction.channel_id  # 默认当前频道
+    channel_id = interaction.channel_id  # Default to current channel
     temp_use = False
     if guild_id not in settings or 'channel_id' not in settings[guild_id]:
         temp_use = True
@@ -283,7 +286,7 @@ async def test_date(interaction: discord.Interaction, date: str):
             temp_use = True
             channel = interaction.channel
     if not date or len(date) != 10 or date.count('-') != 2:
-        await interaction.response.send_message("日期格式错误！用 YYYY-MM-DD (e.g., 2025-11-14)", ephemeral=True)
+        await interaction.response.send_message("Date format error! Use YYYY-MM-DD (e.g., 2025-11-14)", ephemeral=True)
         return
     min_imp = settings.get(guild_id, {}).get('min_importance', 2)
     messages = format_calendar(fetch_us_events(date, min_imp), date, min_imp)
@@ -291,20 +294,20 @@ async def test_date(interaction: discord.Interaction, date: str):
         await channel.send(msg)
     if temp_use:
         view = SaveChannelView(guild_id, channel_id)
-        await interaction.response.send_message(f"已临时用当前频道推送！{channel.mention}\n想设为默认吗？", view=view, ephemeral=True)
+        await interaction.response.send_message(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=view, ephemeral=True)
     else:
-        await interaction.response.send_message(f"测试 {date} 日历已发送到 {channel.mention}", ephemeral=True)
+        await interaction.response.send_message(f"Test {date} calendar sent to {channel.mention}", ephemeral=True)
 
-@bot.tree.command(name="disable_push", description="关闭此服务器的日历推送（删除设置）")
+@bot.tree.command(name="disable_push", description="Disable calendar push for this server (delete settings)")
 async def disable_push(interaction: discord.Interaction):
     guild_id = str(interaction.guild_id)
     if guild_id in settings:
         del settings[guild_id]
         save_settings()
-        await interaction.response.send_message("已关闭此服务器的日历推送！用 /set_channel 重新设置即可恢复。", ephemeral=True)
+        await interaction.response.send_message("Disabled calendar push for this server! Use /set_channel to re-enable.", ephemeral=True)
     else:
-        await interaction.response.send_message("此服务器未设置推送，无需关闭。", ephemeral=True)
+        await interaction.response.send_message("This server has no push settings to disable.", ephemeral=True)
 
-# 启动
+# Run
 if __name__ == "__main__":
     bot.run(TOKEN)
