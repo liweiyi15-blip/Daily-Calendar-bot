@@ -131,33 +131,56 @@ def fetch_us_events(target_date_str, min_importance=2):
             if imp_num < min_importance: continue
             importance = "★" * imp_num
 
-            dt_str = item.get("date", "")  # YYYY-MM-DD
-            time_str = item.get("time", "")  # e.g., "08:30"
+            dt_str = item.get("date", "")  # YYYY-MM-DD HH:MM:SS
+            time_str = dt_str.split()[-1] if ' ' in dt_str else ""
+            date_only = dt_str.split()[0] if ' ' in dt_str else dt_str
             try:
                 if time_str:
-                    et_dt = ET.localize(datetime.datetime.strptime(f"{dt_str} {time_str}", "%Y-%m-%d %H:%M"))
+                    et_dt = ET.localize(datetime.datetime.strptime(f"{date_only} {time_str}", "%Y-%m-%d %H:%M:%S"))
                 else:
-                    et_dt = ET.localize(datetime.datetime.strptime(dt_str, "%Y-%m-%d"))
+                    et_dt = ET.localize(datetime.datetime.strptime(date_only, "%Y-%m-%d"))
                 bjt_dt = et_dt.astimezone(BJT)
                 time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} 北京)"
             except:
-                time_display = f"{dt_str} 全天 ET (时间转换失败)"
+                time_display = f"{date_only} 全天 ET (时间转换失败)"
 
-            translated_title = translate_title(item.get("title", "").strip())
+            translated_title = translate_title(item.get("event", "").strip())
 
             event = {
                 "time": time_display,
                 "importance": importance,
                 "title": translated_title,
-                "forecast": item.get("forecast", "") or "—",
+                "forecast": item.get("estimate", "") or "—",
                 "previous": item.get("previous", "") or "—",
-                "orig_title": item.get("title", "").strip()
+                "orig_title": item.get("event", "").strip()
             }
             events.append(event)
         return sorted(events, key=lambda x: x["time"])
     except Exception as e:
         print(f"API 错误: {e}")
         return []
+
+def split_message(message, max_length=1900):  # 留 100 字符裕度
+    """分割长消息为多消息"""
+    if len(message) <= max_length:
+        return [message]
+    parts = []
+    current = ""
+    lines = message.split('\n')
+    for line in lines:
+        if len(current + line + '\n') > max_length:
+            if current:
+                parts.append(current.strip())
+                current = line + '\n'
+            else:
+                # 太长单行，强制切
+                parts.append(line[:max_length])
+                current = line[max_length:] + '\n'
+        else:
+            current += line + '\n'
+    if current:
+        parts.append(current.strip())
+    return parts
 
 def format_calendar(events, target_date_str, min_importance):
     try:
@@ -178,7 +201,8 @@ def format_calendar(events, target_date_str, min_importance):
         if not any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS):
             lines.append(f"   预测: {e['forecast']} | 前值: {e['previous']}")
     
-    return "\n".join(lines)
+    message = "\n".join(lines)
+    return split_message(message)  # 返回列表，如果长则拆分
 
 class SaveChannelView(discord.ui.View):
     """按钮视图：确认保存频道"""
@@ -209,10 +233,10 @@ async def daily_push():
             print(f"Guild {guild_id} 频道未找到")
             continue
 
-        events = fetch_us_events(tomorrow_str, guild_settings['min_importance'])
-        message = format_calendar(events, tomorrow_str, guild_settings['min_importance'])
-        await channel.send(message)
-        print(f"Guild {guild_id} 已推送 {len(events)} 条事件")
+        messages = format_calendar(fetch_us_events(tomorrow_str, guild_settings['min_importance']), tomorrow_str, guild_settings['min_importance'])
+        for msg in messages:
+            await channel.send(msg)
+        print(f"Guild {guild_id} 已推送 {len(fetch_us_events(tomorrow_str, guild_settings['min_importance']))} 条事件")
 
 @daily_push.before_loop
 async def before_push():
@@ -276,9 +300,9 @@ async def test_push(interaction: discord.Interaction):
             channel = interaction.channel
     min_imp = settings.get(guild_id, {}).get('min_importance', 2)
     tomorrow_str = (datetime.datetime.now(ET).date() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-    events = fetch_us_events(tomorrow_str, min_imp)
-    message = format_calendar(events, tomorrow_str, min_imp)
-    await channel.send(message)
+    messages = format_calendar(fetch_us_events(tomorrow_str, min_imp), tomorrow_str, min_imp)
+    for msg in messages:
+        await channel.send(msg)
     if temp_use:
         view = SaveChannelView(guild_id, channel_id)
         await interaction.response.send_message(f"已临时用当前频道推送！{channel.mention}\n想设为默认吗？", view=view, ephemeral=True)
@@ -303,9 +327,9 @@ async def test_date(interaction: discord.Interaction, date: str):
         await interaction.response.send_message("日期格式错误！用 YYYY-MM-DD (e.g., 2025-11-14)", ephemeral=True)
         return
     min_imp = settings.get(guild_id, {}).get('min_importance', 2)
-    events = fetch_us_events(date, min_imp)
-    message = format_calendar(events, date, min_imp)
-    await channel.send(message)
+    messages = format_calendar(fetch_us_events(date, min_imp), date, min_imp)
+    for msg in messages:
+        await channel.send(msg)
     if temp_use:
         view = SaveChannelView(guild_id, channel_id)
         await interaction.response.send_message(f"已临时用当前频道推送！{channel.mention}\n想设为默认吗？", view=view, ephemeral=True)
