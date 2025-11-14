@@ -163,12 +163,10 @@ def format_calendar(events, target_date_str, min_importance):
     
     for i, e in enumerate(events, 1):
         is_speech = any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS)
-        field_name = f"{e['time']}\n\n\n**{e['title']}**"
-        field_value = f"**{e['importance']}**\n"
+        field_name = f"{e['time']} **{e['title']}**"
+        field_value = f"\n**{e['importance']}**"
         if not is_speech:
-            field_value += f"F: {e['forecast']} | P: {e['previous']}\n\n"
-        else:
-            field_value += "\n"
+            field_value += f"\nF: {e['forecast']} | P: {e['previous']}"
         embed.add_field(name=field_name, value=field_value, inline=False)
     
     embed.set_footer(text="Data from FMP API. Actuals not updated.")
