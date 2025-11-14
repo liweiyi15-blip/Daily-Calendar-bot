@@ -41,6 +41,9 @@ WEEKDAY_MAP = {
 # Impact mapping (FMP "High" = ★★★, "Medium" = ★★, "Low" = ★)
 IMPACT_MAP = {"Low": 1, "Medium": 2, "High": 3}
 
+# Impact colors for Embed
+IMPACT_COLORS = {"Low": 0x808080, "Medium": 0xFFA500, "High": 0xFF0000}
+
 # Global settings (per-guild, supports multiple servers)
 settings = {}  # {guild_id: {'channel_id': int, 'min_importance': 2}}
 
@@ -156,15 +159,19 @@ def format_calendar(events, target_date_str, min_importance):
     if not events:
         return f"**{target_date_str} ({weekday_cn}) No US economic events ({min_importance}★ or above)**"
     
-    lines = [f"**{target_date_str} ({weekday_cn}) US Macro Economic Calendar**"]
-    for e in events:
-        lines.append(f"{e['time']}   **{e['title']}**   ({e['importance']})")
-        
-        if not any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS):
-            lines.append(f"   F: {e['forecast']} | P: {e['previous']}")
+    embed = discord.Embed(title=f"{target_date_str} ({weekday_cn}) US Macro Economic Calendar", color=0x00FF00)
+    embed.description = "Filtered US Medium+ Impact Events"
     
-    message = "\n".join(lines)
-    return split_message(message)  # Return list if long, split
+    for i, e in enumerate(events, 1):
+        field_name = f"{e['time']} **{e['title']}** ({e['importance']})"
+        field_value = ""
+        if not any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS):
+            field_value = f"F: {e['forecast']} | P: {e['previous']}"
+        embed.add_field(name=field_name, value=field_value, inline=False)
+    
+    embed.set_footer(text="Data from FMP API. Actuals not updated.")
+    
+    return [embed]
 
 class SaveChannelView(discord.ui.View):
     """Button view: Confirm save channel"""
@@ -195,9 +202,9 @@ async def daily_push():
             print(f"Guild {guild_id} channel not found")
             continue
 
-        messages = format_calendar(fetch_us_events(tomorrow_str, guild_settings['min_importance']), tomorrow_str, guild_settings['min_importance'])
-        for msg in messages:
-            await channel.send(msg)
+        embeds = format_calendar(fetch_us_events(tomorrow_str, guild_settings['min_importance']), tomorrow_str, guild_settings['min_importance'])
+        for embed in embeds:
+            await channel.send(embed=embed)
         print(f"Guild {guild_id} pushed {len(fetch_us_events(tomorrow_str, guild_settings['min_importance']))} events")
 
 @daily_push.before_loop
@@ -262,9 +269,9 @@ async def test_push(interaction: discord.Interaction):
             channel = interaction.channel
     min_imp = settings.get(guild_id, {}).get('min_importance', 2)
     tomorrow_str = (datetime.datetime.now(ET).date() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-    messages = format_calendar(fetch_us_events(tomorrow_str, min_imp), tomorrow_str, min_imp)
-    for msg in messages:
-        await channel.send(msg)
+    embeds = format_calendar(fetch_us_events(tomorrow_str, min_imp), tomorrow_str, min_imp)
+    for embed in embeds:
+        await channel.send(embed=embed)
     if temp_use:
         view = SaveChannelView(guild_id, channel_id)
         await interaction.response.send_message(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=view, ephemeral=True)
@@ -289,9 +296,9 @@ async def test_date(interaction: discord.Interaction, date: str):
         await interaction.response.send_message("Date format error! Use YYYY-MM-DD (e.g., 2025-11-14)", ephemeral=True)
         return
     min_imp = settings.get(guild_id, {}).get('min_importance', 2)
-    messages = format_calendar(fetch_us_events(date, min_imp), date, min_imp)
-    for msg in messages:
-        await channel.send(msg)
+    embeds = format_calendar(fetch_us_events(date, min_imp), date, min_imp)
+    for embed in embeds:
+        await channel.send(embed=embed)
     if temp_use:
         view = SaveChannelView(guild_id, channel_id)
         await interaction.response.send_message(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=view, ephemeral=True)
