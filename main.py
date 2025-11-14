@@ -158,10 +158,10 @@ def format_calendar(events, target_date_str, min_importance):
     
     lines = [f"**{target_date_str} ({weekday_cn}) US Macro Economic Calendar**"]
     for e in events:
-        lines.append(f"\n{e['time']} **{e['title']}** {e['importance']}")
+        lines.append(f"{e['time']}   **{e['title']}**   ({e['importance']})")
         
         if not any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS):
-            lines.append(f"   Forecast: {e['forecast']} | Previous: {e['previous']}")
+            lines.append(f"   F: {e['forecast']} | P: {e['previous']}")
     
     message = "\n".join(lines)
     return split_message(message)  # Return list if long, split
