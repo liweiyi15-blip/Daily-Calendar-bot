@@ -1,4 +1,3 @@
-# main.py
 import discord
 from discord.ext import commands, tasks
 import requests
@@ -163,10 +162,13 @@ def format_calendar(events, target_date_str, min_importance):
     embed.description = "Filtered US Medium+ Impact Events"
     
     for i, e in enumerate(events, 1):
-        field_name = f"{e['time']} **{e['title']}** ({e['importance']})"
-        field_value = ""
-        if not any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS):
-            field_value = f"F: {e['forecast']} | P: {e['previous']}"
+        is_speech = any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS)
+        field_name = f"{e['time']}\n\n\n**{e['title']}**"
+        field_value = f"**{e['importance']}**\n"
+        if not is_speech:
+            field_value += f"F: {e['forecast']} | P: {e['previous']}\n\n"
+        else:
+            field_value += "\n"
         embed.add_field(name=field_name, value=field_value, inline=False)
     
     embed.set_footer(text="Data from FMP API. Actuals not updated.")
