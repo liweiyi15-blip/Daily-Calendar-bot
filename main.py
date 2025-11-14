@@ -6,6 +6,7 @@ import datetime
 import pytz
 import json
 import os
+import re  # 用于去括号
 
 # ================== 配置区 ==================
 TOKEN = os.getenv('TOKEN') or 'YOUR_BOT_TOKEN_HERE'  # Discord Token
@@ -102,6 +103,8 @@ def save_settings():
 
 def translate_title(title):
     """翻译标题：优先字典匹配，否则返回原标题"""
+    # 移除括号参考期 e.g., "CPI m/m (Oct/25)" -> "CPI m/m"
+    title = re.sub(r'\s*\([^)]*\)', '', title).strip()
     lower_title = title.lower()
     for eng, chi in TRANSLATION_DICT.items():
         if eng.lower() in lower_title:
@@ -123,39 +126,43 @@ def fetch_us_events(target_date_str, min_importance=2):
         response = requests.get(FMP_URL, params=params, timeout=10)
         response.raise_for_status()
         data_json = response.json()
-        events = []
+        events = {}
         for item in data_json:
             if item.get("country") != "US": continue  # 只美国
             imp_str = item.get("impact", "Low")
             imp_num = IMPACT_MAP.get(imp_str.capitalize(), 1)
             if imp_num < min_importance: continue
-            importance = "★" * imp_num
+            title = item.get("event", "").strip()
+            translated_title = translate_title(title)
+            key = translated_title.lower()  # 去重键（标题小写）
+            if key not in events or item.get("date") > events[key]['date']:  # 取最新参考期
+                importance = "★" * imp_num
 
-            dt_str = item.get("date", "")  # YYYY-MM-DD HH:MM:SS
-            time_str = dt_str.split()[-1] if ' ' in dt_str else ""
-            date_only = dt_str.split()[0] if ' ' in dt_str else dt_str
-            try:
-                if time_str:
-                    et_dt = ET.localize(datetime.datetime.strptime(f"{date_only} {time_str}", "%Y-%m-%d %H:%M:%S"))
-                else:
-                    et_dt = ET.localize(datetime.datetime.strptime(date_only, "%Y-%m-%d"))
-                bjt_dt = et_dt.astimezone(BJT)
-                time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} 北京)"
-            except:
-                time_display = f"{date_only} 全天 ET (时间转换失败)"
+                dt_str = item.get("date", "")  # YYYY-MM-DD HH:MM:SS
+                time_str = dt_str.split()[-1] if ' ' in dt_str else ""
+                date_only = dt_str.split()[0] if ' ' in dt_str else dt_str
+                try:
+                    if time_str:
+                        et_dt = ET.localize(datetime.datetime.strptime(f"{date_only} {time_str}", "%Y-%m-%d %H:%M:%S"))
+                    else:
+                        et_dt = ET.localize(datetime.datetime.strptime(date_only, "%Y-%m-%d"))
+                    bjt_dt = et_dt.astimezone(BJT)
+                    time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} UTC+8)"
+                except:
+                    time_display = f"{date_only} 全天 ET (时间转换失败)"
 
-            translated_title = translate_title(item.get("event", "").strip())
-
-            event = {
-                "time": time_display,
-                "importance": importance,
-                "title": translated_title,
-                "forecast": item.get("estimate", "") or "—",
-                "previous": item.get("previous", "") or "—",
-                "orig_title": item.get("event", "").strip()
-            }
-            events.append(event)
-        return sorted(events, key=lambda x: x["time"])
+                events[key] = {
+                    "time": time_display,
+                    "importance": importance,
+                    "title": translated_title,
+                    "forecast": item.get("estimate", "") or "—",
+                    "previous": item.get("previous", "") or "—",
+                    "orig_title": title,
+                    "date": item.get("date", "")  # 用于去重排序
+                }
+        # 转为列表，按时间排序
+        event_list = sorted(events.values(), key=lambda x: x["time"])
+        return event_list
     except Exception as e:
         print(f"API 错误: {e}")
         return []
