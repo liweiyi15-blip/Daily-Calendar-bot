@@ -112,4 +112,168 @@ def translate_title(title):
 def fetch_us_events(target_date_str, min_importance=2):
     """拉取指定日期的事件（YYYY-MM-DD 格式）"""
     try:
-        target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date
+        target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return []  # 无效日期返回空
+    importance_str = ",".join([str(i) for i in range(min_importance, 4)])  # e.g., "2,3"
+    params = {
+        "date": target_date_str,
+        "country": "5",  # 美国
+        "importance": importance_str
+    }
+    try:
+        response = requests.get(API_URL, headers=HEADERS, params=params, timeout=10)
+        data = response.json()
+        events = []
+        for item in data.get("data", []):
+            time_str = item["time"].strip()
+            if not time_str or time_str == "All Day": continue
+
+            try:
+                et_time = datetime.datetime.strptime(time_str, "%H:%M").time()
+                et_dt = datetime.datetime.combine(target_date, et_time, tzinfo=ET)
+                bjt_dt = et_dt.astimezone(BJT)
+                time_display = f"{et_time.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} 北京)"
+            except:
+                time_display = f"{time_str} ET (时间转换失败)"
+
+            imp_num = int(item["importance"])
+            if imp_num < min_importance: continue  # 额外过滤
+            importance = "★" * imp_num
+
+            translated_title = translate_title(item["title"].strip())
+
+            event = {
+                "time": time_display,
+                "importance": importance,
+                "title": translated_title,
+                "forecast": item["forecast"] or "—",
+                "previous": item["previous"] or "—",
+                "orig_title": item["title"].strip()
+            }
+            events.append(event)
+        return sorted(events, key=lambda x: x["time"])
+    except Exception as e:
+        print(f"API 错误: {e}")
+        return []
+
+def format_calendar(events, target_date_str, min_importance):
+    try:
+        target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return "**无效日期格式 (用 YYYY-MM-DD)**"
+    target_dt = datetime.datetime.combine(target_date, datetime.time(0, 0), tzinfo=ET)
+    weekday_en = target_dt.strftime('%A')
+    weekday_cn = WEEKDAY_MAP.get(weekday_en, weekday_en)
+    
+    if not events:
+        return f"**{target_date_str} ({weekday_cn}) 无美国经济事件（{min_importance}★ 或以上）**"
+    
+    lines = [f"**{target_date_str} ({weekday_cn}) 美国宏观经济日历**"]
+    for e in events:
+        lines.append(f"\n{e['time']} **{e['title']}** {e['importance']}")
+        
+        if not any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS):
+            lines.append(f"   预测: {e['forecast']} | 前值: {e['previous']}")
+    
+    return "\n".join(lines)
+
+@tasks.loop(hours=24)
+async def daily_push():
+    await bot.wait_until_ready()
+    tomorrow_str = (datetime.datetime.now(ET).date() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    for guild_id, guild_settings in settings.items():
+        guild = bot.get_guild(int(guild_id))
+        if not guild:
+            continue
+        channel = guild.get_channel(guild_settings['channel_id'])
+        if not channel:
+            print(f"Guild {guild_id} 频道未找到")
+            continue
+
+        events = fetch_us_events(tomorrow_str, guild_settings['min_importance'])
+        message = format_calendar(events, tomorrow_str, guild_settings['min_importance'])
+        await channel.send(message)
+        print(f"Guild {guild_id} 已推送 {len(events)} 条事件")
+
+@daily_push.before_loop
+async def before_push():
+    now = datetime.datetime.now(ET)
+    next_run = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if next_run <= now:
+        next_run += datetime.timedelta(days=1)
+    wait_seconds = (next_run - now).total_seconds()
+    print(f"等待 {wait_seconds/3600:.1f} 小时后，于美东 00:00 推送...")
+    await discord.utils.sleep_until(next_run)
+
+@bot.event
+async def on_ready():
+    load_settings()
+    print(f'Bot 已上线: {bot.user}')
+    if not daily_push.is_running():
+        daily_push.start()
+    try:
+        synced = await bot.tree.sync()
+        print(f"已同步 {len(synced)} 个斜杠命令")
+    except Exception as e:
+        print(f"同步命令失败: {e}")
+
+# 斜杠命令组
+@bot.tree.command(name="set_channel", description="设置推送频道（当前频道）")
+async def set_channel(interaction: discord.Interaction):
+    guild_id = str(interaction.guild_id)
+    if guild_id not in settings:
+        settings[guild_id] = {}
+    settings[guild_id]['channel_id'] = interaction.channel_id
+    save_settings()
+    await interaction.response.send_message(f"已设置推送频道为: {interaction.channel.mention}", ephemeral=True)
+
+@bot.tree.command(name="set_importance", description="设置最小重要性 (1=★, 2=★★, 3=★★★)")
+@discord.app_commands.describe(level="最小星级 (1-3)")
+@discord.app_commands.choices(level=[
+    discord.app_commands.Choice(name="★ (所有)", value=1),
+    discord.app_commands.Choice(name="★★ (中高)", value=2),
+    discord.app_commands.Choice(name="★★★ (高)", value=3)
+])
+async def set_importance(interaction: discord.Interaction, level: discord.app_commands.Choice[int]):
+    guild_id = str(interaction.guild_id)
+    if guild_id not in settings:
+        settings[guild_id] = {}
+    settings[guild_id]['min_importance'] = level.value
+    save_settings()
+    await interaction.response.send_message(f"已设置最小重要性为 {level.name} (数值: {level.value})", ephemeral=True)
+
+@bot.tree.command(name="test_push", description="手动测试推送明日日历")
+async def test_push(interaction: discord.Interaction):
+    guild_id = str(interaction.guild_id)
+    if guild_id not in settings or 'channel_id' not in settings[guild_id]:
+        await interaction.response.send_message("请先用 /set_channel 设置频道", ephemeral=True)
+        return
+    channel = interaction.guild.get_channel(settings[guild_id]['channel_id'])
+    min_imp = settings[guild_id].get('min_importance', 2)
+    tomorrow_str = (datetime.datetime.now(ET).date() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    events = fetch_us_events(tomorrow_str, min_imp)
+    message = format_calendar(events, tomorrow_str, min_imp)
+    await channel.send(message)
+    await interaction.response.send_message(f"测试推送已发送到 {channel.mention}", ephemeral=True)
+
+@bot.tree.command(name="test_date", description="测试指定日期的日历 (YYYY-MM-DD)")
+@discord.app_commands.describe(date="测试日期 (e.g., 2025-11-14)")
+async def test_date(interaction: discord.Interaction, date: str):
+    guild_id = str(interaction.guild_id)
+    if guild_id not in settings or 'channel_id' not in settings[guild_id]:
+        await interaction.response.send_message("请先用 /set_channel 设置频道", ephemeral=True)
+        return
+    if not date or len(date) != 10 or date.count('-') != 2:
+        await interaction.response.send_message("日期格式错误！用 YYYY-MM-DD (e.g., 2025-11-14)", ephemeral=True)
+        return
+    channel = interaction.guild.get_channel(settings[guild_id]['channel_id'])
+    min_imp = settings[guild_id].get('min_importance', 2)
+    events = fetch_us_events(date, min_imp)
+    message = format_calendar(events, date, min_imp)
+    await channel.send(message)
+    await interaction.response.send_message(f"测试 {date} 日历已发送到 {channel.mention}", ephemeral=True)
+
+# 启动
+if __name__ == "__main__":
+    bot.run(TOKEN)
