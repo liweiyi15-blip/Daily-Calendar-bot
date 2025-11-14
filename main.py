@@ -19,10 +19,12 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 ET = pytz.timezone('America/New_York')
 BJT = pytz.timezone('Asia/Shanghai')
 
-# Investing.com API（无需密钥）
-API_URL = "https://api.investing.com/api/financialdata/calendar"
+# Investing.com API（POST 端点）
+API_URL = "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "X-Requested-With": "XMLHttpRequest",
+    "Content-Type": "application/x-www-form-urlencoded",
     "Referer": "https://www.investing.com/economic-calendar/",
     "Origin": "https://www.investing.com"
 }
@@ -116,43 +118,54 @@ def fetch_us_events(target_date_str, min_importance=2):
     except ValueError:
         return []  # 无效日期返回空
     importance_str = ",".join([str(i) for i in range(min_importance, 4)])  # e.g., "2,3"
-    params = {
-        "date": target_date_str,
-        "country": "5",  # 美国
-        "importance": importance_str
+    data = {
+        'dateFrom': target_date_str,
+        'dateTo': target_date_str,
+        'timeZone': '8',  # GMT+8 for Beijing-compatible
+        'country': '5',  # 美国
+        'importance': importance_str,
+        'limit_from': '0'  # 第一页
     }
     try:
-        response = requests.get(API_URL, headers=HEADERS, params=params, timeout=10)
-        data = response.json()
+        response = requests.post(API_URL, headers=HEADERS, data=data, timeout=10)
+        response.raise_for_status()  # 检查 HTTP 错误
+        data_json = response.json()
         events = []
-        for item in data.get("data", []):
-            time_str = item["time"].strip()
+        for item in data_json.get("data", []):
+            time_str = item.get("date", "").strip()
             if not time_str or time_str == "All Day": continue
 
             try:
-                et_time = datetime.datetime.strptime(time_str, "%H:%M").time()
-                et_dt = datetime.datetime.combine(target_date, et_time, tzinfo=ET)
-                bjt_dt = et_dt.astimezone(BJT)
-                time_display = f"{et_time.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} 北京)"
+                # 解析时间 (格式如 "2025-11-14 08:30")
+                if len(time_str.split()) > 1:
+                    dt_str = f"{target_date_str} {time_str.split()[1]}"
+                    et_dt = ET.localize(datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M"))
+                    bjt_dt = et_dt.astimezone(BJT)
+                    time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} 北京)"
+                else:
+                    time_display = f"{time_str} ET (时间转换失败)"
             except:
                 time_display = f"{time_str} ET (时间转换失败)"
 
-            imp_num = int(item["importance"])
-            if imp_num < min_importance: continue  # 额外过滤
+            imp_num = int(item.get("impact", 1))
+            if imp_num < min_importance: continue
             importance = "★" * imp_num
 
-            translated_title = translate_title(item["title"].strip())
+            translated_title = translate_title(item.get("name", "").strip())
 
             event = {
                 "time": time_display,
                 "importance": importance,
                 "title": translated_title,
-                "forecast": item["forecast"] or "—",
-                "previous": item["previous"] or "—",
-                "orig_title": item["title"].strip()
+                "forecast": item.get("forecast", "") or "—",
+                "previous": item.get("previous", "") or "—",
+                "orig_title": item.get("name", "").strip()
             }
             events.append(event)
         return sorted(events, key=lambda x: x["time"])
+    except json.JSONDecodeError as e:
+        print(f"JSON 解析错误: {e} (响应: {response.text[:100]})")
+        return []
     except Exception as e:
         print(f"API 错误: {e}")
         return []
