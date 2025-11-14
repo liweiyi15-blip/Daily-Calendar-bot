@@ -27,6 +27,17 @@ FMP_URL = "https://financialmodelingprep.com/stable/economic-calendar"
 # 讲话类关键词（英文标题检测）
 SPEECH_KEYWORDS = ["Speech", "Testimony", "Remarks", "Press Conference", "Hearing"]
 
+# 中文星期映射（简写版）
+WEEKDAY_MAP = {
+    'Monday': '周一',
+    'Tuesday': '周二',
+    'Wednesday': '周三',
+    'Thursday': '周四',
+    'Friday': '周五',
+    'Saturday': '周六',
+    'Sunday': '周日'
+}
+
 # 星级映射 (FMP 用 "High" = ★★★, "Medium" = ★★, "Low" = ★)
 IMPACT_MAP = {"Low": 1, "Medium": 2, "High": 3}
 
@@ -73,7 +84,7 @@ def fetch_us_events(target_date_str, min_importance=2):
             if imp_num < min_importance: continue
             importance = "★" * imp_num
 
-            event_title = clean_title(item.get("event", "").strip())  # 移除参考期，无翻译
+            event_title = clean_title(item.get("event", "").strip())  # 移除参考期
 
             dt_str = item.get("date", "")  # YYYY-MM-DD HH:MM:SS
             time_str = dt_str.split()[-1] if ' ' in dt_str else ""
@@ -84,9 +95,9 @@ def fetch_us_events(target_date_str, min_importance=2):
                 else:
                     et_dt = ET.localize(datetime.datetime.strptime(date_only, "%Y-%m-%d"))
                 bjt_dt = et_dt.astimezone(BJT)
-                time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} UTC+8)"
+                time_display = f"{bjt_dt.strftime('%H:%M')} ({et_dt.strftime('%H:%M')} ET)"
             except:
-                time_display = f"{date_only} 全天 ET (时间转换失败)"
+                time_display = f"全天 ({date_only})"
 
             event = {
                 "time": time_display,
@@ -94,7 +105,8 @@ def fetch_us_events(target_date_str, min_importance=2):
                 "title": event_title,
                 "forecast": item.get("estimate", "") or "—",
                 "previous": item.get("previous", "") or "—",
-                "orig_title": item.get("event", "").strip()
+                "orig_title": item.get("event", "").strip(),
+                "date": item.get("date", "")  # 用于去重排序
             }
             # 去重：取最新（按日期字符串排序，取最大）
             key = event_title.lower()  # 标题小写作为键
