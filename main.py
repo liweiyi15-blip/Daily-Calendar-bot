@@ -8,7 +8,8 @@ import json
 import os
 
 # ================== 配置区 ==================
-TOKEN = os.getenv('TOKEN') or 'YOUR_BOT_TOKEN_HERE'  # 从环境变量读取，Railway 设置
+TOKEN = os.getenv('TOKEN') or 'YOUR_BOT_TOKEN_HERE'  # Discord Token
+FINNHUB_KEY = os.getenv('FINNHUB_KEY') or 'your_finnhub_key_here'  # Finnhub API Key (Railway Variables)
 SETTINGS_FILE = 'settings.json'  # 持久化设置文件
 
 intents = discord.Intents.default()
@@ -19,15 +20,8 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 ET = pytz.timezone('America/New_York')
 BJT = pytz.timezone('Asia/Shanghai')
 
-# Investing.com API（POST 端点）
-API_URL = "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "X-Requested-With": "XMLHttpRequest",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Referer": "https://www.investing.com/economic-calendar/",
-    "Origin": "https://www.investing.com"
-}
+# Finnhub API
+FINNHUB_URL = "https://finnhub.io/api/v1/calendar/economic"
 
 # 讲话类关键词（英文标题检测）
 SPEECH_KEYWORDS = ["Speech", "Testimony", "Remarks", "Press Conference", "Hearing"]
@@ -88,6 +82,9 @@ WEEKDAY_MAP = {
     'Sunday': '周日'
 }
 
+# 星级映射
+IMPACT_MAP = {"low": 1, "medium": 2, "high": 3}
+
 # 全局设置（per-guild，支持多服务器）
 settings = {}  # {guild_id: {'channel_id': int, 'min_importance': 2}}
 
@@ -112,60 +109,49 @@ def translate_title(title):
     return title
 
 def fetch_us_events(target_date_str, min_importance=2):
-    """拉取指定日期的事件（YYYY-MM-DD 格式）"""
+    """拉取指定日期的美国事件（YYYY-MM-DD 格式）"""
     try:
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
     except ValueError:
         return []  # 无效日期返回空
-    importance_str = ",".join([str(i) for i in range(min_importance, 4)])  # e.g., "2,3"
-    data = {
-        'dateFrom': target_date_str,
-        'dateTo': target_date_str,
-        'timeZone': '8',  # GMT+8 for Beijing-compatible
-        'country': '5',  # 美国
-        'importance': importance_str,
-        'limit_from': '0'  # 第一页
+    params = {
+        "from": target_date_str,
+        "to": target_date_str,
+        "token": FINNHUB_KEY
     }
     try:
-        response = requests.post(API_URL, headers=HEADERS, data=data, timeout=10)
-        response.raise_for_status()  # 检查 HTTP 错误
+        response = requests.get(FINNHUB_URL, params=params, timeout=10)
+        response.raise_for_status()
         data_json = response.json()
         events = []
-        for item in data_json.get("data", []):
-            time_str = item.get("date", "").strip()
-            if not time_str or time_str == "All Day": continue
-
-            try:
-                # 解析时间 (格式如 "2025-11-14 08:30")
-                if len(time_str.split()) > 1:
-                    dt_str = f"{target_date_str} {time_str.split()[1]}"
-                    et_dt = ET.localize(datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M"))
-                    bjt_dt = et_dt.astimezone(BJT)
-                    time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} 北京)"
-                else:
-                    time_display = f"{time_str} ET (时间转换失败)"
-            except:
-                time_display = f"{time_str} ET (时间转换失败)"
-
-            imp_num = int(item.get("impact", 1))
+        for item in data_json.get("economicCalendar", []):
+            if item.get("country") != "US": continue  # 只美国
+            imp_str = item.get("impact", "low")
+            imp_num = IMPACT_MAP.get(imp_str.lower(), 1)
             if imp_num < min_importance: continue
             importance = "★" * imp_num
 
-            translated_title = translate_title(item.get("name", "").strip())
+            dt_str = item.get("datetime", "")  # UTC ISO
+            try:
+                utc_dt = datetime.datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+                et_dt = utc_dt.astimezone(ET)
+                bjt_dt = utc_dt.astimezone(BJT)
+                time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} 北京)"
+            except:
+                time_display = "时间未知 ET (时间转换失败)"
+
+            translated_title = translate_title(item.get("headline", "").strip())
 
             event = {
                 "time": time_display,
                 "importance": importance,
                 "title": translated_title,
-                "forecast": item.get("forecast", "") or "—",
+                "forecast": item.get("expected", "") or "—",
                 "previous": item.get("previous", "") or "—",
-                "orig_title": item.get("name", "").strip()
+                "orig_title": item.get("headline", "").strip()
             }
             events.append(event)
         return sorted(events, key=lambda x: x["time"])
-    except json.JSONDecodeError as e:
-        print(f"JSON 解析错误: {e} (响应: {response.text[:100]})")
-        return []
     except Exception as e:
         print(f"API 错误: {e}")
         return []
