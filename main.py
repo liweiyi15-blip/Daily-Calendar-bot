@@ -6,10 +6,10 @@ import datetime
 import pytz
 import json
 import os
+import feedparser  # RSS 解析
 
 # ================== 配置区 ==================
 TOKEN = os.getenv('TOKEN') or 'YOUR_BOT_TOKEN_HERE'  # Discord Token
-FINNHUB_KEY = os.getenv('FINNHUB_KEY') or 'your_finnhub_key_here'  # Finnhub API Key (Railway Variables)
 SETTINGS_FILE = 'settings.json'  # 持久化设置文件
 
 intents = discord.Intents.default()
@@ -20,8 +20,8 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 ET = pytz.timezone('America/New_York')
 BJT = pytz.timezone('Asia/Shanghai')
 
-# Finnhub API
-FINNHUB_URL = "https://finnhub.io/api/v1/calendar/economic"
+# Forex Factory RSS
+FF_BASE = "https://www.forexfactory.com/calendar?"
 
 # 讲话类关键词（英文标题检测）
 SPEECH_KEYWORDS = ["Speech", "Testimony", "Remarks", "Press Conference", "Hearing"]
@@ -82,9 +82,6 @@ WEEKDAY_MAP = {
     'Sunday': '周日'
 }
 
-# 星级映射
-IMPACT_MAP = {"low": 1, "medium": 2, "high": 3}
-
 # 全局设置（per-guild，支持多服务器）
 settings = {}  # {guild_id: {'channel_id': int, 'min_importance': 2}}
 
@@ -109,51 +106,67 @@ def translate_title(title):
     return title
 
 def fetch_us_events(target_date_str, min_importance=2):
-    """拉取指定日期的美国事件（YYYY-MM-DD 格式）"""
+    """拉取指定日期的美国事件（YYYY-MM-DD 格式，Forex Factory RSS）"""
     try:
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
     except ValueError:
         return []  # 无效日期返回空
-    params = {
-        "from": target_date_str,
-        "to": target_date_str,
-        "token": FINNHUB_KEY
-    }
+    # 构造 RSS URL (e.g., day=nov15.2025)
+    month_str = target_date.strftime('%b').lower()  # nov
+    day_str = target_date.strftime('%d')  # 15
+    year_str = target_date.strftime('%Y')  # 2025
+    rss_url = f"{FF_BASE}day={month_str}{day_str}.{year_str}&rss=1"
     try:
-        response = requests.get(FINNHUB_URL, params=params, timeout=10)
-        response.raise_for_status()
-        data_json = response.json()
+        feed = feedparser.parse(rss_url)
         events = []
-        for item in data_json.get("economicCalendar", []):
-            if item.get("country") != "US": continue  # 只美国
-            imp_str = item.get("impact", "low")
-            imp_num = IMPACT_MAP.get(imp_str.lower(), 1)
+        for entry in feed.entries:
+            title = entry.title.strip()
+            # 过滤 US (USD)
+            if 'USD' not in title:
+                continue
+            # 提取描述 (Forecast | Previous | Impact)
+            desc = entry.description.strip()
+            # 解析描述 (e.g., "Forecast: 0.2% | Previous: 0.3% | Impact: 3")
+            parts = desc.split('|')
+            forecast = previous = impact_str = ""
+            for part in parts:
+                if 'Forecast:' in part:
+                    forecast = part.split('Forecast:')[-1].strip() or "—"
+                elif 'Previous:' in part:
+                    previous = part.split('Previous:')[-1].strip() or "—"
+                elif 'Impact:' in part:
+                    impact_str = part.split('Impact:')[-1].strip()
+            imp_num = int(impact_str) if impact_str.isdigit() else 1
             if imp_num < min_importance: continue
             importance = "★" * imp_num
 
-            dt_str = item.get("datetime", "")  # UTC ISO
+            # 解析时间 (pubDate or title)
+            time_str = entry.pubDate if entry.pubDate else ""
             try:
-                utc_dt = datetime.datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
-                et_dt = utc_dt.astimezone(ET)
-                bjt_dt = utc_dt.astimezone(BJT)
-                time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} 北京)"
+                if time_str:
+                    dt_obj = datetime.datetime.strptime(time_str, "%a, %d %b %Y %H:%M:%S %Z")
+                    et_dt = pytz.utc.localize(dt_obj).astimezone(ET)
+                    bjt_dt = et_dt.astimezone(BJT)
+                    time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} 北京)"
+                else:
+                    time_display = "时间未知 ET"
             except:
-                time_display = "时间未知 ET (时间转换失败)"
+                time_display = "时间未知 ET (转换失败)"
 
-            translated_title = translate_title(item.get("headline", "").strip())
+            translated_title = translate_title(title)
 
             event = {
                 "time": time_display,
                 "importance": importance,
                 "title": translated_title,
-                "forecast": item.get("expected", "") or "—",
-                "previous": item.get("previous", "") or "—",
-                "orig_title": item.get("headline", "").strip()
+                "forecast": forecast,
+                "previous": previous,
+                "orig_title": title
             }
             events.append(event)
         return sorted(events, key=lambda x: x["time"])
     except Exception as e:
-        print(f"API 错误: {e}")
+        print(f"RSS 错误: {e}")
         return []
 
 def format_calendar(events, target_date_str, min_importance):
@@ -176,6 +189,22 @@ def format_calendar(events, target_date_str, min_importance):
             lines.append(f"   预测: {e['forecast']} | 前值: {e['previous']}")
     
     return "\n".join(lines)
+
+class SaveChannelView(discord.ui.View):
+    """按钮视图：确认保存频道"""
+    def __init__(self, guild_id: str, channel_id: int):
+        super().__init__(timeout=300)  # 5 分钟超时
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+
+    @discord.ui.button(label="设为默认频道", style=discord.ButtonStyle.primary)
+    async def save_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.guild_id not in settings:
+            settings[self.guild_id] = {}
+        settings[self.guild_id]['channel_id'] = self.channel_id
+        save_settings()
+        await interaction.response.send_message("已保存为默认频道！下次推送会自动发这里。", ephemeral=True)
+        self.stop()
 
 @tasks.loop(hours=24)
 async def daily_push():
@@ -245,33 +274,63 @@ async def set_importance(interaction: discord.Interaction, level: discord.app_co
 @bot.tree.command(name="test_push", description="手动测试推送明日日历")
 async def test_push(interaction: discord.Interaction):
     guild_id = str(interaction.guild_id)
+    channel_id = interaction.channel_id  # 默认当前频道
+    temp_use = False
     if guild_id not in settings or 'channel_id' not in settings[guild_id]:
-        await interaction.response.send_message("请先用 /set_channel 设置频道", ephemeral=True)
-        return
-    channel = interaction.guild.get_channel(settings[guild_id]['channel_id'])
-    min_imp = settings[guild_id].get('min_importance', 2)
+        temp_use = True
+        channel = interaction.channel
+    else:
+        channel = interaction.guild.get_channel(settings[guild_id]['channel_id'])
+        if not channel:
+            temp_use = True
+            channel = interaction.channel
+    min_imp = settings.get(guild_id, {}).get('min_importance', 2)
     tomorrow_str = (datetime.datetime.now(ET).date() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
     events = fetch_us_events(tomorrow_str, min_imp)
     message = format_calendar(events, tomorrow_str, min_imp)
     await channel.send(message)
-    await interaction.response.send_message(f"测试推送已发送到 {channel.mention}", ephemeral=True)
+    if temp_use:
+        view = SaveChannelView(guild_id, channel_id)
+        await interaction.response.send_message(f"已临时用当前频道推送！{channel.mention}\n想设为默认吗？", view=view, ephemeral=True)
+    else:
+        await interaction.response.send_message(f"测试推送已发送到 {channel.mention}", ephemeral=True)
 
 @bot.tree.command(name="test_date", description="测试指定日期的日历 (YYYY-MM-DD)")
 @discord.app_commands.describe(date="测试日期 (e.g., 2025-11-14)")
 async def test_date(interaction: discord.Interaction, date: str):
     guild_id = str(interaction.guild_id)
+    channel_id = interaction.channel_id  # 默认当前频道
+    temp_use = False
     if guild_id not in settings or 'channel_id' not in settings[guild_id]:
-        await interaction.response.send_message("请先用 /set_channel 设置频道", ephemeral=True)
-        return
+        temp_use = True
+        channel = interaction.channel
+    else:
+        channel = interaction.guild.get_channel(settings[guild_id]['channel_id'])
+        if not channel:
+            temp_use = True
+            channel = interaction.channel
     if not date or len(date) != 10 or date.count('-') != 2:
         await interaction.response.send_message("日期格式错误！用 YYYY-MM-DD (e.g., 2025-11-14)", ephemeral=True)
         return
-    channel = interaction.guild.get_channel(settings[guild_id]['channel_id'])
-    min_imp = settings[guild_id].get('min_importance', 2)
+    min_imp = settings.get(guild_id, {}).get('min_importance', 2)
     events = fetch_us_events(date, min_imp)
     message = format_calendar(events, date, min_imp)
     await channel.send(message)
-    await interaction.response.send_message(f"测试 {date} 日历已发送到 {channel.mention}", ephemeral=True)
+    if temp_use:
+        view = SaveChannelView(guild_id, channel_id)
+        await interaction.response.send_message(f"已临时用当前频道推送！{channel.mention}\n想设为默认吗？", view=view, ephemeral=True)
+    else:
+        await interaction.response.send_message(f"测试 {date} 日历已发送到 {channel.mention}", ephemeral=True)
+
+@bot.tree.command(name="disable_push", description="关闭此服务器的日历推送（删除设置）")
+async def disable_push(interaction: discord.Interaction):
+    guild_id = str(interaction.guild_id)
+    if guild_id in settings:
+        del settings[guild_id]
+        save_settings()
+        await interaction.response.send_message("已关闭此服务器的日历推送！用 /set_channel 重新设置即可恢复。", ephemeral=True)
+    else:
+        await interaction.response.send_message("此服务器未设置推送，无需关闭。", ephemeral=True)
 
 # 启动
 if __name__ == "__main__":
