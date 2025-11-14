@@ -6,10 +6,10 @@ import datetime
 import pytz
 import json
 import os
-import feedparser  # RSS 解析
 
 # ================== 配置区 ==================
 TOKEN = os.getenv('TOKEN') or 'YOUR_BOT_TOKEN_HERE'  # Discord Token
+FMP_KEY = os.getenv('FMP_KEY') or 'your_fmp_key_here'  # FMP API Key (Railway Variables)
 SETTINGS_FILE = 'settings.json'  # 持久化设置文件
 
 intents = discord.Intents.default()
@@ -20,8 +20,8 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 ET = pytz.timezone('America/New_York')
 BJT = pytz.timezone('Asia/Shanghai')
 
-# Forex Factory RSS
-FF_BASE = "https://www.forexfactory.com/calendar?"
+# FMP API
+FMP_URL = "https://financialmodelingprep.com/api/v3/economic_calendar"
 
 # 讲话类关键词（英文标题检测）
 SPEECH_KEYWORDS = ["Speech", "Testimony", "Remarks", "Press Conference", "Hearing"]
@@ -82,6 +82,9 @@ WEEKDAY_MAP = {
     'Sunday': '周日'
 }
 
+# 星级映射 (FMP 用 "High" = ★★★, "Medium" = ★★, "Low" = ★)
+IMPACT_MAP = {"Low": 1, "Medium": 2, "High": 3}
+
 # 全局设置（per-guild，支持多服务器）
 settings = {}  # {guild_id: {'channel_id': int, 'min_importance': 2}}
 
@@ -106,67 +109,54 @@ def translate_title(title):
     return title
 
 def fetch_us_events(target_date_str, min_importance=2):
-    """拉取指定日期的美国事件（YYYY-MM-DD 格式，Forex Factory RSS）"""
+    """拉取指定日期的美国事件（YYYY-MM-DD 格式）"""
     try:
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
     except ValueError:
         return []  # 无效日期返回空
-    # 构造 RSS URL (e.g., day=nov15.2025)
-    month_str = target_date.strftime('%b').lower()  # nov
-    day_str = target_date.strftime('%d')  # 15
-    year_str = target_date.strftime('%Y')  # 2025
-    rss_url = f"{FF_BASE}day={month_str}{day_str}.{year_str}&rss=1"
+    params = {
+        "from": target_date_str,
+        "to": target_date_str,
+        "apikey": FMP_KEY
+    }
     try:
-        feed = feedparser.parse(rss_url)
+        response = requests.get(FMP_URL, params=params, timeout=10)
+        response.raise_for_status()
+        data_json = response.json()
         events = []
-        for entry in feed.entries:
-            title = entry.title.strip()
-            # 过滤 US (USD)
-            if 'USD' not in title:
-                continue
-            # 提取描述 (Forecast | Previous | Impact)
-            desc = entry.description.strip()
-            # 解析描述 (e.g., "Forecast: 0.2% | Previous: 0.3% | Impact: 3")
-            parts = desc.split('|')
-            forecast = previous = impact_str = ""
-            for part in parts:
-                if 'Forecast:' in part:
-                    forecast = part.split('Forecast:')[-1].strip() or "—"
-                elif 'Previous:' in part:
-                    previous = part.split('Previous:')[-1].strip() or "—"
-                elif 'Impact:' in part:
-                    impact_str = part.split('Impact:')[-1].strip()
-            imp_num = int(impact_str) if impact_str.isdigit() else 1
+        for item in data_json:
+            if item.get("country") != "US": continue  # 只美国
+            imp_str = item.get("impact", "Low")
+            imp_num = IMPACT_MAP.get(imp_str.capitalize(), 1)
             if imp_num < min_importance: continue
             importance = "★" * imp_num
 
-            # 解析时间 (pubDate or title)
-            time_str = entry.pubDate if entry.pubDate else ""
+            dt_str = item.get("date", "")  # YYYY-MM-DD
+            time_str = item.get("time", "")  # e.g., "08:30"
             try:
                 if time_str:
-                    dt_obj = datetime.datetime.strptime(time_str, "%a, %d %b %Y %H:%M:%S %Z")
-                    et_dt = pytz.utc.localize(dt_obj).astimezone(ET)
-                    bjt_dt = et_dt.astimezone(BJT)
-                    time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} 北京)"
+                    et_dt = ET.localize(datetime.datetime.strptime(f"{dt_str} {time_str}", "%Y-%m-%d %H:%M"))
                 else:
-                    time_display = "时间未知 ET"
+                    et_dt = ET.localize(datetime.datetime.strptime(dt_str, "%Y-%m-%d"))
+                bjt_dt = et_dt.astimezone(BJT)
+                time_display = f"{et_dt.strftime('%H:%M')} ET ({bjt_dt.strftime('%H:%M')} 北京)"
             except:
-                time_display = "时间未知 ET (转换失败)"
+                time_display = f"{dt_str} 全天 ET (时间转换失败)"
 
-            translated_title = translate_title(title)
+            translated_title = translate_title(item.get("title", "").strip())
 
             event = {
                 "time": time_display,
                 "importance": importance,
                 "title": translated_title,
-                "forecast": forecast,
-                "previous": previous,
-                "orig_title": title
+                "forecast": item.get("forecast", "") or "—",
+                "previous": item.get("previous", "") or "—",
+                "orig_title": item.get("title", "").strip()
             }
             events.append(event)
         return sorted(events, key=lambda x: x["time"])
     except Exception as e:
-        print(f"RSS 错误: {e}")
+        print(f"API 错误: {e}")
         return []
 
 def format_calendar(events, target_date_str, min_importance):
