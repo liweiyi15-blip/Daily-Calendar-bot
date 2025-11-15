@@ -21,6 +21,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # Timezones
 ET = pytz.timezone('America/New_York')
 BJT = pytz.timezone('Asia/Shanghai')
+UTC = pytz.UTC
 
 # FMP Stable API
 FMP_URL = "https://financialmodelingprep.com/stable/economic-calendar"
@@ -97,14 +98,23 @@ FINANCE_TERM_MAP = {
     "CFTC Nasdaq 100 speculative net positions": "CFTC 纳斯达克 100 投机净仓位",
     "CFTC Gold Speculative net positions": "CFTC 黄金 投机净仓位",
     "CFTC Crude Oil speculative net positions": "CFTC 原油 投机净仓位",
+    "Nonfarm Productivity qoq": "非农生产率 环比（季度）",
+    "Core PPI mom": "核心 PPI 环比",
+    "Retail Sales ex autos mom": "排除汽车零售销售 环比",
+    "Retail Sales ex gas/autos mom": "排除汽油/汽车零售销售 环比",
+    "Retail Sales mom": "零售销售 环比",
+    "Retail Sales yoy": "零售销售 同比",
 
     # 通用后缀/术语
     "m/m": "环比",
     "MoM": "环比",
+    "mom": "环比",
     "y/y": "同比",
     "YoY": "同比",
+    "yoy": "同比",
     "q/q": "环比（季度）",
     "QoQ": "环比（季度）",
+    "qoq": "环比（季度）",
     "sa": "季节调整",
     "nsa": "非季节调整",
     "Estimate": "预期",
@@ -125,7 +135,7 @@ FINANCE_TERM_MAP = {
 ENGLISH_ABBREVIATIONS = [
     "CPI", "PPI", "GDP", "ISM", "PMI", "FOMC", "Fed", "JOLTS",
     "Philly Fed", "Empire State", "FRED", "ECB", "BOJ", "BOE",
-    "CFTC", "S&P", "QoQ", "MoM", "YoY", "Ex"  # Ex for Ex Autos 等，可扩展
+    "CFTC", "S&P", "QoQ", "MoM", "YoY", "Ex", "mom", "yoy", "qoq"  # Ex for Ex Autos 等，可扩展
 ]
 
 def load_settings():
@@ -143,6 +153,8 @@ def save_settings():
 def clean_title(title):
     """Remove parentheses reference period e.g., "CPI m/m (Oct/25)" -> "CPI m/m" """
     title = re.sub(r'\s*\([^)]*\)', '', title).strip()
+    # 标准化大小写以匹配字典（部分小写）
+    title = title.replace(' QoQ', ' qoq').replace(' MoM', ' mom').replace(' YoY', ' yoy')
     return title
 
 def protect_abbreviations(text):
@@ -159,7 +171,7 @@ def restore_abbreviations(text, original_text):
     for abbr in ENGLISH_ABBREVIATIONS:
         marker = f'{{{{{abbr}}}}}'  # 注意大小写
         # 恢复时匹配原大小写，但简化假设原为大写
-        restored = restored.replace(marker, abbr)
+        restored = restored.replace(marker, abbr.upper() if abbr.isupper() else abbr)
     return restored
 
 def translate_finance_text(text, target_lang='zh'):
@@ -175,11 +187,12 @@ def translate_finance_text(text, target_lang='zh'):
     # 再尝试字典映射（精确匹配或部分替换，字典已调整为保留缩写）
     translated = protected_text
     for eng_term, zh_term in FINANCE_TERM_MAP.items():
-        if eng_term.lower() in translated.lower():
-            translated = re.sub(re.escape(eng_term), zh_term, translated, flags=re.IGNORECASE)
+        pattern = re.escape(eng_term)
+        if re.search(pattern, translated, re.IGNORECASE):
+            translated = re.sub(pattern, zh_term, translated, flags=re.IGNORECASE)
 
     # 如果仍有英文（非缩写部分），使用 Google Translate 翻译剩余部分（自然语言处理）
-    if re.search(r'[a-zA-Z]{2,}', translated) and '{' not in translated:  # 如果还有英文且无保护标记（避免翻译保护部分）
+    if re.search(r'[a-zA-Z]{2,}', translated) and '{{{' not in translated:  # 如果还有英文且无保护标记
         try:
             # 只翻译非保护部分：拆分句子，翻译无标记的部分
             parts = re.split(r'({{{[^}]+}}})', translated)
@@ -206,7 +219,7 @@ def translate_finance_text(text, target_lang='zh'):
     return translated.strip()
 
 def fetch_us_events(target_date_str, min_importance=2):
-    """Fetch US events for the specified date (YYYY-MM-DD format)，并翻译结果"""
+    """Fetch US events for the specified date (YYYY-MM-DD format)，并翻译结果。FMP date 是 UTC 时间"""
     try:
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
     except ValueError:
@@ -232,21 +245,18 @@ def fetch_us_events(target_date_str, min_importance=2):
             # 翻译标题（保留缩写）
             translated_title = translate_finance_text(event_title)
 
-            dt_str = item.get("date", "")  # YYYY-MM-DD HH:MM:SS
+            dt_str = item.get("date", "")  # YYYY-MM-DD HH:MM:SS UTC
             if not dt_str:
                 continue  # Skip events without date
-            time_str = dt_str.split()[-1] if ' ' in dt_str else ""
-            date_only = dt_str.split()[0] if ' ' in dt_str else dt_str
             try:
-                if time_str:
-                    et_dt = ET.localize(datetime.datetime.strptime(f"{date_only} {time_str}", "%Y-%m-%d %H:%M:%S"))
-                else:
-                    et_dt = ET.localize(datetime.datetime.strptime(date_only, "%Y-%m-%d"))
-                bjt_dt = et_dt.astimezone(BJT)
+                # 正确解析：dt_str 是 UTC 时间
+                utc_dt = UTC.localize(datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S"))
+                et_dt = utc_dt.astimezone(ET)
+                bjt_dt = utc_dt.astimezone(BJT)
                 time_display = f"{bjt_dt.strftime('%H:%M')} ({et_dt.strftime('%H:%M')} ET)"
             except ValueError as ve:
                 print(f"Time parsing error: {ve}, dt_str: {dt_str}")
-                time_display = f"All Day ({date_only})"
+                time_display = f"All Day ({dt_str.split()[0]})"
 
             forecast = item.get("estimate", "") or "—"
             previous = item.get("previous", "") or "—"
@@ -267,7 +277,7 @@ def fetch_us_events(target_date_str, min_importance=2):
             key = event_title.lower()  # Title lowercase as key
             if key not in events or dt_str > events[key]['date']:
                 events[key] = event
-        # Convert to list, sort by time
+        # Convert to list, sort by time (BJT time)
         event_list = sorted(events.values(), key=lambda x: x["time"])
         return event_list
     except Exception as e:
@@ -300,14 +310,19 @@ def format_calendar(events, target_date_str, min_importance):
     try:
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
     except ValueError:
-        embed = discord.Embed(title="今日新闻", description="日期格式无效 (使用 YYYY-MM-DD)", color=0x00FF00)
+        embed = discord.Embed(title="经济日历", description="日期格式无效 (使用 YYYY-MM-DD)", color=0x00FF00)
         return [embed]
     
     if not events:
-        embed = discord.Embed(title="今日新闻", description=f"无事件 (★{'★' * (min_importance-1)} 或以上)", color=0x00FF00)
+        embed = discord.Embed(title="经济日历", description=f"无事件 (★{'★' * (min_importance-1)} 或以上)", color=0x00FF00)
         return [embed]
     
-    embed = discord.Embed(title="今日新闻", color=0x00FF00)
+    # 标题调整为覆盖24h范围
+    start_bjt = BJT.localize(datetime.datetime.combine(target_date, datetime.time(8, 0)))
+    end_bjt = start_bjt + datetime.timedelta(days=1)
+    title = f"经济日历 (BJT {start_bjt.strftime('%m/%d %H:%M')} - {end_bjt.strftime('%m/%d %H:%M')})"
+    
+    embed = discord.Embed(title=title, color=0x00FF00)
     
     for i, e in enumerate(events, 1):
         is_speech = any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS)
