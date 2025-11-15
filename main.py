@@ -51,7 +51,7 @@ settings = {}  # {guild_id: {'channel_id': int, 'min_importance': 2}}
 # 初始化 Google Translate 客户端
 translate_client = translate.Client() if GOOGLE_TRANSLATE_KEY != 'your_google_translate_key_here' else None
 
-# 财经术语中英映射字典（确保准确性，基于标准财经翻译，保留英文缩写如 CPI、PPI 等）
+# 财经术语中英映射字典（确保准确性，基于标准财经翻译，保留英文缩写如 CPI、PPI 等，人名用标准音译）
 FINANCE_TERM_MAP = {
     # 复合术语：保留缩写 + 翻译后缀
     "CPI m/m": "CPI 环比",
@@ -60,19 +60,25 @@ FINANCE_TERM_MAP = {
     "Core CPI y/y": "核心 CPI 同比",
     "PPI m/m": "PPI 环比",
     "PPI y/y": "PPI 同比",
+    "Core PPI MoM": "核心 PPI 环比",
+    "Producer Price Index MoM": "生产者物价指数 环比",
     "GDP Growth Rate q/q": "GDP 增长率 环比（季度）",
     "GDP Growth Rate y/y": "GDP 增长率 同比",
     "Retail Sales m/m": "零售销售 环比",
     "Retail Sales y/y": "零售销售 同比",
+    "Retail Sales Ex Autos MoM": "排除汽车零售销售 环比",
+    "Retail Sales Ex Gas/Autos MoM": "排除汽油/汽车零售销售 环比",
     "Industrial Production m/m": "工业生产 环比",
     "ISM Manufacturing PMI": "ISM 制造业 PMI",
     "ISM Services PMI": "ISM 服务业 PMI",
     "Nonfarm Payrolls": "非农就业人数",
+    "Nonfarm Productivity QoQ": "非农生产率 环比（季度）",
     "Unemployment Rate": "失业率",
     "FOMC Meeting Minutes": "FOMC 会议纪要",
     "Fed Interest Rate Decision": "美联储 利率决议",
     "Building Permits": "建筑许可",
     "Housing Starts": "房屋开工",
+    "Business Inventories MoM": "商业库存 环比",
     "Capacity Utilization": "产能利用率",
     "Consumer Confidence": "消费者信心指数",
     "Michigan Consumer Sentiment": "密歇根 消费者信心指数",
@@ -86,11 +92,19 @@ FINANCE_TERM_MAP = {
     "Empire State Manufacturing Index": "帝国州 制造业指数",
     "Leading Index": "领先指标",
     "Beige Book": "褐皮书",
+    "Atlanta Fed GDPNow": "亚特兰大联储 GDPNow",
+    "CFTC S&P 500 speculative net positions": "CFTC S&P 500 投机净仓位",
+    "CFTC Nasdaq 100 speculative net positions": "CFTC 纳斯达克 100 投机净仓位",
+    "CFTC Gold Speculative net positions": "CFTC 黄金 投机净仓位",
+    "CFTC Crude Oil speculative net positions": "CFTC 原油 投机净仓位",
 
     # 通用后缀/术语
     "m/m": "环比",
+    "MoM": "环比",
     "y/y": "同比",
+    "YoY": "同比",
     "q/q": "环比（季度）",
+    "QoQ": "环比（季度）",
     "sa": "季节调整",
     "nsa": "非季节调整",
     "Estimate": "预期",
@@ -98,16 +112,20 @@ FINANCE_TERM_MAP = {
     "Actual": "实际值",
     "Forecast": "预测值",
 
-    # 美联储相关
+    # 美联储相关讲话（人名用标准中文音译）
     "FOMC": "FOMC",  # 保留缩写
     "Fed": "美联储",
+    "Fed Schmid Speech": "美联储 施密德 讲话",
+    "Fed Logan Speech": "美联储 洛根 讲话",
+    "Fed Bostic Speech": "美联储 博斯蒂克 讲话",
     "Powell": "鲍威尔",  # 如有姓名，可扩展
 }
 
 # 英文缩写列表（保护不翻译）
 ENGLISH_ABBREVIATIONS = [
     "CPI", "PPI", "GDP", "ISM", "PMI", "FOMC", "Fed", "JOLTS",
-    "Philly Fed", "Empire State", "FRED", "ECB", "BOJ", "BOE"  # 可扩展
+    "Philly Fed", "Empire State", "FRED", "ECB", "BOJ", "BOE",
+    "CFTC", "S&P", "QoQ", "MoM", "YoY", "Ex"  # Ex for Ex Autos 等，可扩展
 ]
 
 def load_settings():
@@ -321,7 +339,8 @@ class SaveChannelView(discord.ui.View):
 @tasks.loop(hours=24)
 async def daily_push():
     await bot.wait_until_ready()
-    tomorrow_str = (datetime.datetime.now(ET).date() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    # 使用 BJT 当前日期作为 target_date_str（对应 UTC 当天全天，即 BJT 08:00 到次日 08:00 的 US 事件）
+    target_date_str = datetime.datetime.now(BJT).date().strftime("%Y-%m-%d")
     for guild_id, guild_settings in settings.items():
         guild = bot.get_guild(int(guild_id))
         if not guild:
@@ -331,19 +350,19 @@ async def daily_push():
             print(f"Guild {guild_id} channel not found")
             continue
 
-        embeds = format_calendar(fetch_us_events(tomorrow_str, guild_settings['min_importance']), tomorrow_str, guild_settings['min_importance'])
+        embeds = format_calendar(fetch_us_events(target_date_str, guild_settings['min_importance']), target_date_str, guild_settings['min_importance'])
         for embed in embeds:
             await channel.send(embed=embed)
-        print(f"Guild {guild_id} pushed {len(fetch_us_events(tomorrow_str, guild_settings['min_importance']))} events")
+        print(f"Guild {guild_id} pushed {len(fetch_us_events(target_date_str, guild_settings['min_importance']))} events for {target_date_str}")
 
 @daily_push.before_loop
 async def before_push():
-    now = datetime.datetime.now(ET)
-    next_run = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    now = datetime.datetime.now(BJT)
+    next_run = now.replace(hour=8, minute=0, second=0, microsecond=0)
     if next_run <= now:
         next_run += datetime.timedelta(days=1)
     wait_seconds = (next_run - now).total_seconds()
-    print(f"Waiting {wait_seconds/3600:.1f} hours for ET 00:00 push...")
+    print(f"Waiting {wait_seconds/3600:.1f} hours for BJT 08:00 push...")
     await discord.utils.sleep_until(next_run)
 
 @bot.event
@@ -383,7 +402,7 @@ async def set_importance(interaction: discord.Interaction, level: discord.app_co
     save_settings()
     await interaction.response.send_message(f"Set minimum importance to {level.name} (value: {level.value})", ephemeral=True)
 
-@bot.tree.command(name="test_push", description="Manual test push tomorrow's calendar")
+@bot.tree.command(name="test_push", description="Manual test push today's calendar (BJT 08:00 to next day)")
 async def test_push(interaction: discord.Interaction):
     guild_id = str(interaction.guild_id)
     channel_id = interaction.channel_id  # Default to current channel
@@ -397,8 +416,8 @@ async def test_push(interaction: discord.Interaction):
             temp_use = True
             channel = interaction.channel
     min_imp = settings.get(guild_id, {}).get('min_importance', 2)
-    tomorrow_str = (datetime.datetime.now(ET).date() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-    embeds = format_calendar(fetch_us_events(tomorrow_str, min_imp), tomorrow_str, min_imp)
+    target_date_str = datetime.datetime.now(BJT).date().strftime("%Y-%m-%d")
+    embeds = format_calendar(fetch_us_events(target_date_str, min_imp), target_date_str, min_imp)
     for embed in embeds:
         await channel.send(embed=embed)
     if temp_use:
