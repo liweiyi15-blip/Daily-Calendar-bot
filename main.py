@@ -153,14 +153,15 @@ def fetch_us_events(target_date_str, min_importance=2):
                 "forecast": translated_forecast,  # 翻译后
                 "previous": translated_previous,  # 翻译后
                 "orig_title": item.get("event", ""),
-                "date": dt_str  # For de-duplication sorting
+                "date": dt_str,  # For de-duplication sorting
+                "bjt_timestamp": bjt_dt  # 新增：用于 chronological 排序
             }
             # De-duplicate: take the latest (by date string, take max)
             key = event_title.lower()  # Title lowercase as key
             if key not in events or dt_str > events[key]['date']:
                 events[key] = event
-        # Convert to list, sort by time (BJT time)
-        event_list = sorted(events.values(), key=lambda x: x["time"])
+        # Convert to list, sort by bjt_timestamp (chronological, handles cross-midnight)
+        event_list = sorted(events.values(), key=lambda x: x["bjt_timestamp"])
         print(f"Filtered {filtered_count} events in BJT 08:00 - next 08:00 range")  # 日志过滤计数
         return event_list
     except Exception as e:
@@ -339,4 +340,32 @@ async def test_date(interaction: discord.Interaction, date: str):
         temp_use = True
         channel = interaction.channel
     else:
-        channel
+        channel = interaction.guild.get_channel(settings[guild_id]['channel_id'])
+        if not channel:
+            temp_use = True
+            channel = interaction.channel
+    if not date or len(date) != 10 or date.count('-') != 2:
+        await interaction.followup.send("Date format error! Use YYYY-MM-DD (e.g., 2025-11-14)", ephemeral=True)
+        return
+    min_imp = settings.get(guild_id, {}).get('min_importance', 2)
+    embeds = format_calendar(fetch_us_events(date, min_imp), date, min_imp)
+    for embed in embeds:
+        await channel.send(embed=embed)
+    if temp_use:
+        await interaction.followup.send(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=SaveChannelView(guild_id, channel_id), ephemeral=True)
+    else:
+        await interaction.followup.send(f"Test {date} calendar sent to {channel.mention}", ephemeral=True)
+
+@bot.tree.command(name="disable_push", description="Disable calendar push for this server (delete settings)")
+async def disable_push(interaction: discord.Interaction):
+    guild_id = str(interaction.guild_id)
+    if guild_id in settings:
+        del settings[guild_id]
+        save_settings()
+        await interaction.response.send_message("Disabled calendar push for this server! Use /set_channel to re-enable.", ephemeral=True)
+    else:
+        await interaction.response.send_message("This server has no push settings to disable.", ephemeral=True)
+
+# Run
+if __name__ == "__main__":
+    bot.run(TOKEN)
