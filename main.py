@@ -62,24 +62,32 @@ FINANCE_TERM_MAP = {
     "PPI m/m": "PPI 环比",
     "PPI y/y": "PPI 同比",
     "Core PPI MoM": "核心 PPI 环比",
+    "Core PPI mom": "核心 PPI 环比",
     "Producer Price Index MoM": "生产者物价指数 环比",
+    "Producer Price Index mom": "生产者物价指数 环比",
     "GDP Growth Rate q/q": "GDP 增长率 环比（季度）",
     "GDP Growth Rate y/y": "GDP 增长率 同比",
     "Retail Sales m/m": "零售销售 环比",
+    "Retail Sales mom": "零售销售 环比",
     "Retail Sales y/y": "零售销售 同比",
+    "Retail Sales yoy": "零售销售 同比",
     "Retail Sales Ex Autos MoM": "排除汽车零售销售 环比",
+    "Retail Sales ex autos mom": "排除汽车零售销售 环比",
     "Retail Sales Ex Gas/Autos MoM": "排除汽油/汽车零售销售 环比",
+    "Retail Sales ex gas/autos mom": "排除汽油/汽车零售销售 环比",
     "Industrial Production m/m": "工业生产 环比",
     "ISM Manufacturing PMI": "ISM 制造业 PMI",
     "ISM Services PMI": "ISM 服务业 PMI",
     "Nonfarm Payrolls": "非农就业人数",
     "Nonfarm Productivity QoQ": "非农生产率 环比（季度）",
+    "Nonfarm Productivity qoq": "非农生产率 环比（季度）",
     "Unemployment Rate": "失业率",
     "FOMC Meeting Minutes": "FOMC 会议纪要",
     "Fed Interest Rate Decision": "美联储 利率决议",
     "Building Permits": "建筑许可",
     "Housing Starts": "房屋开工",
     "Business Inventories MoM": "商业库存 环比",
+    "Business Inventories mom": "商业库存 环比",
     "Capacity Utilization": "产能利用率",
     "Consumer Confidence": "消费者信心指数",
     "Michigan Consumer Sentiment": "密歇根 消费者信心指数",
@@ -98,12 +106,6 @@ FINANCE_TERM_MAP = {
     "CFTC Nasdaq 100 speculative net positions": "CFTC 纳斯达克 100 投机净仓位",
     "CFTC Gold Speculative net positions": "CFTC 黄金 投机净仓位",
     "CFTC Crude Oil speculative net positions": "CFTC 原油 投机净仓位",
-    "Nonfarm Productivity qoq": "非农生产率 环比（季度）",
-    "Core PPI mom": "核心 PPI 环比",
-    "Retail Sales ex autos mom": "排除汽车零售销售 环比",
-    "Retail Sales ex gas/autos mom": "排除汽油/汽车零售销售 环比",
-    "Retail Sales mom": "零售销售 环比",
-    "Retail Sales yoy": "零售销售 同比",
 
     # 通用后缀/术语
     "m/m": "环比",
@@ -154,8 +156,18 @@ def clean_title(title):
     """Remove parentheses reference period e.g., "CPI m/m (Oct/25)" -> "CPI m/m" """
     title = re.sub(r'\s*\([^)]*\)', '', title).strip()
     # 标准化大小写以匹配字典（部分小写）
-    title = title.replace(' QoQ', ' qoq').replace(' MoM', ' mom').replace(' YoY', ' yoy')
-    return title
+    title = title.lower().replace(' qoq', ' qoq').replace(' mom', ' mom').replace(' yoy', ' yoy')
+    # 部分标准化为字典键
+    title = title.replace('nonfarm productivity qoq', 'nonfarm productivity qoq')
+    title = title.replace('core ppi mom', 'core ppi mom')
+    title = title.replace('producer price index mom', 'producer price index mom')
+    title = title.replace('retail sales ex autos mom', 'retail sales ex autos mom')
+    title = title.replace('retail sales ex gas/autos mom', 'retail sales ex gas/autos mom')
+    title = title.replace('retail sales mom', 'retail sales mom')
+    title = title.replace('retail sales yoy', 'retail sales yoy')
+    title = title.replace('business inventories mom', 'business inventories mom')
+    title = title.replace('atlanta fed gdpnow', 'atlanta fed gdpnow')
+    return title.title()  # 恢复标题格式
 
 def protect_abbreviations(text):
     """保护英文缩写：用临时标记包围，避免翻译"""
