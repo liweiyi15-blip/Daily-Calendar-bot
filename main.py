@@ -88,7 +88,12 @@ def translate_finance_text(text, target_lang='zh'):
         print(f'No translation client for: {text}')  # 调试日志
         return str(text).strip()
 
-    text = str(text)
+    text = str(text).strip()
+    # 新增：纯数字跳过（优化日志噪音）
+    if re.match(r'^-?\d+(\.\d+)?$', text) or re.match(r'^-?\d+%$', text):
+        print(f'跳过数字翻译: {text}')
+        return text
+
     try:
         print(f'翻译调用: {text}')  # 你的风格日志
         # 检测语言（可选，财经多英文，直接翻）
