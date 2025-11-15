@@ -302,6 +302,9 @@ async def set_importance(interaction: discord.Interaction, level: discord.app_co
 
 @bot.tree.command(name="test_push", description="Manual test push today's calendar (BJT 08:00 to next day)")
 async def test_push(interaction: discord.Interaction):
+    # 修复：立即 defer 响应，避免 3 秒超时
+    await interaction.response.defer(ephemeral=True)
+    
     guild_id = str(interaction.guild_id)
     channel_id = interaction.channel_id  # Default to current channel
     temp_use = False
@@ -319,13 +322,16 @@ async def test_push(interaction: discord.Interaction):
     for embed in embeds:
         await channel.send(embed=embed)
     if temp_use:
-        await interaction.response.send_message(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=SaveChannelView(guild_id, channel_id), ephemeral=True)
+        await interaction.followup.send(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=SaveChannelView(guild_id, channel_id), ephemeral=True)
     else:
-        await interaction.response.send_message(f"Test push sent to {channel.mention}", ephemeral=True)
+        await interaction.followup.send(f"Test push sent to {channel.mention}", ephemeral=True)
 
 @bot.tree.command(name="test_date", description="Test calendar for specific date (YYYY-MM-DD)")
 @discord.app_commands.describe(date="Test date (e.g., 2025-11-14)")
 async def test_date(interaction: discord.Interaction, date: str):
+    # 修复：立即 defer 响应，避免 3 秒超时
+    await interaction.response.defer(ephemeral=True)
+    
     guild_id = str(interaction.guild_id)
     channel_id = interaction.channel_id  # Default to current channel
     temp_use = False
@@ -333,32 +339,4 @@ async def test_date(interaction: discord.Interaction, date: str):
         temp_use = True
         channel = interaction.channel
     else:
-        channel = interaction.guild.get_channel(settings[guild_id]['channel_id'])
-        if not channel:
-            temp_use = True
-            channel = interaction.channel
-    if not date or len(date) != 10 or date.count('-') != 2:
-        await interaction.response.send_message("Date format error! Use YYYY-MM-DD (e.g., 2025-11-14)", ephemeral=True)
-        return
-    min_imp = settings.get(guild_id, {}).get('min_importance', 2)
-    embeds = format_calendar(fetch_us_events(date, min_imp), date, min_imp)
-    for embed in embeds:
-        await channel.send(embed=embed)
-    if temp_use:
-        await interaction.response.send_message(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=SaveChannelView(guild_id, channel_id), ephemeral=True)
-    else:
-        await interaction.response.send_message(f"Test {date} calendar sent to {channel.mention}", ephemeral=True)
-
-@bot.tree.command(name="disable_push", description="Disable calendar push for this server (delete settings)")
-async def disable_push(interaction: discord.Interaction):
-    guild_id = str(interaction.guild_id)
-    if guild_id in settings:
-        del settings[guild_id]
-        save_settings()
-        await interaction.response.send_message("Disabled calendar push for this server! Use /set_channel to re-enable.", ephemeral=True)
-    else:
-        await interaction.response.send_message("This server has no push settings to disable.", ephemeral=True)
-
-# Run
-if __name__ == "__main__":
-    bot.run(TOKEN)
+        channel
