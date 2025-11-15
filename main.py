@@ -176,6 +176,8 @@ def save_settings():
 
 def clean_title(title):
     """Remove parentheses reference period e.g., "CPI m/m (Oct/25)" -> "CPI m/m" """
+    if not isinstance(title, str):
+        title = str(title)
     title = re.sub(r'\s*\([^)]*\)', '', title).strip()
     # 强制小写以匹配字典变体
     lower_title = title.lower()
@@ -201,6 +203,8 @@ def clean_title(title):
 
 def protect_abbreviations(text):
     """保护英文缩写：用临时标记包围，避免翻译"""
+    if not isinstance(text, str):
+        text = str(text)
     protected = text
     for abbr in ENGLISH_ABBREVIATIONS:
         protected = re.sub(rf'\b{re.escape(abbr)}\b', f'{{{{{abbr}}}}}', protected, flags=re.IGNORECASE)
@@ -208,6 +212,8 @@ def protect_abbreviations(text):
 
 def restore_abbreviations(text, original_text):
     """恢复被保护的缩写"""
+    if not isinstance(text, str):
+        text = str(text)
     restored = text
     for abbr in ENGLISH_ABBREVIATIONS:
         marker = f'{{{{{abbr}}}}}'
@@ -218,6 +224,9 @@ def translate_finance_text(text, target_lang='zh'):
     """翻译财经文本：优先使用映射字典，后用 Google Translate，确保自然和准确，保留英文缩写"""
     if not text:
         return text
+
+    # 确保 text 是字符串
+    text = str(text)
 
     # 强制字典匹配（忽略大小写，全覆盖，即使无 Translate 客户端）
     for eng_term, zh_term in FINANCE_TERM_MAP.items():
