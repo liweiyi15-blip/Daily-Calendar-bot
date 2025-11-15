@@ -52,9 +52,9 @@ settings = {}  # {guild_id: {'channel_id': int, 'min_importance': 2}}
 # 初始化 Google Translate 客户端
 translate_client = translate.Client() if GOOGLE_TRANSLATE_KEY != 'your_google_translate_key_here' else None
 
-# 财经术语中英映射字典（确保准确性，基于标准财经翻译，保留英文缩写如 CPI、PPI 等，人名用标准音译）
+# 财经术语中英映射字典（确保准确性，基于标准财经翻译，保留英文缩写如 CPI、PPI 等，人名用标准音译；添加大小写变体）
 FINANCE_TERM_MAP = {
-    # 复合术语：保留缩写 + 翻译后缀
+    # 复合术语：保留缩写 + 翻译后缀（添加小写变体）
     "CPI m/m": "CPI 环比",
     "CPI y/y": "CPI 同比",
     "Core CPI m/m": "核心 CPI 环比",
@@ -63,24 +63,31 @@ FINANCE_TERM_MAP = {
     "PPI y/y": "PPI 同比",
     "Core PPI MoM": "核心 PPI 环比",
     "Core PPI mom": "核心 PPI 环比",
+    "core ppi mom": "核心 PPI 环比",
     "Producer Price Index MoM": "生产者物价指数 环比",
     "Producer Price Index mom": "生产者物价指数 环比",
+    "producer price index mom": "生产者物价指数 环比",
     "GDP Growth Rate q/q": "GDP 增长率 环比（季度）",
     "GDP Growth Rate y/y": "GDP 增长率 同比",
     "Retail Sales m/m": "零售销售 环比",
     "Retail Sales mom": "零售销售 环比",
+    "retail sales mom": "零售销售 环比",
     "Retail Sales y/y": "零售销售 同比",
     "Retail Sales yoy": "零售销售 同比",
+    "retail sales yoy": "零售销售 同比",
     "Retail Sales Ex Autos MoM": "排除汽车零售销售 环比",
     "Retail Sales ex autos mom": "排除汽车零售销售 环比",
+    "retail sales ex autos mom": "排除汽车零售销售 环比",
     "Retail Sales Ex Gas/Autos MoM": "排除汽油/汽车零售销售 环比",
     "Retail Sales ex gas/autos mom": "排除汽油/汽车零售销售 环比",
+    "retail sales ex gas/autos mom": "排除汽油/汽车零售销售 环比",
     "Industrial Production m/m": "工业生产 环比",
     "ISM Manufacturing PMI": "ISM 制造业 PMI",
     "ISM Services PMI": "ISM 服务业 PMI",
     "Nonfarm Payrolls": "非农就业人数",
     "Nonfarm Productivity QoQ": "非农生产率 环比（季度）",
     "Nonfarm Productivity qoq": "非农生产率 环比（季度）",
+    "nonfarm productivity qoq": "非农生产率 环比（季度）",
     "Unemployment Rate": "失业率",
     "FOMC Meeting Minutes": "FOMC 会议纪要",
     "Fed Interest Rate Decision": "美联储 利率决议",
@@ -88,6 +95,7 @@ FINANCE_TERM_MAP = {
     "Housing Starts": "房屋开工",
     "Business Inventories MoM": "商业库存 环比",
     "Business Inventories mom": "商业库存 环比",
+    "business inventories mom": "商业库存 环比",
     "Capacity Utilization": "产能利用率",
     "Consumer Confidence": "消费者信心指数",
     "Michigan Consumer Sentiment": "密歇根 消费者信心指数",
@@ -102,10 +110,20 @@ FINANCE_TERM_MAP = {
     "Leading Index": "领先指标",
     "Beige Book": "褐皮书",
     "Atlanta Fed GDPNow": "亚特兰大联储 GDPNow",
+    "atlanta fed gdpnow": "亚特兰大联储 GDPNow",
+    "Atlanta Fed Gdpnow": "亚特兰大联储 GDPNow",
     "CFTC S&P 500 speculative net positions": "CFTC S&P 500 投机净仓位",
     "CFTC Nasdaq 100 speculative net positions": "CFTC 纳斯达克 100 投机净仓位",
     "CFTC Gold Speculative net positions": "CFTC 黄金 投机净仓位",
     "CFTC Crude Oil speculative net positions": "CFTC 原油 投机净仓位",
+    "cftc s&p 500 speculative net positions": "CFTC S&P 500 投机净仓位",
+    "cftc nasdaq 100 speculative net positions": "CFTC 纳斯达克 100 投机净仓位",
+    "cftc gold speculative net positions": "CFTC 黄金 投机净仓位",
+    "cftc crude oil speculative net positions": "CFTC 原油 投机净仓位",
+    "Cftc S&P 500 Speculative Net Positions": "CFTC S&P 500 投机净仓位",
+    "Cftc Nasdaq 100 Speculative Net Positions": "CFTC 纳斯达克 100 投机净仓位",
+    "Cftc Gold Speculative Net Positions": "CFTC 黄金 投机净仓位",
+    "Cftc Crude Oil Speculative Net Positions": "CFTC 原油 投机净仓位",
 
     # 通用后缀/术语
     "m/m": "环比",
@@ -117,6 +135,7 @@ FINANCE_TERM_MAP = {
     "q/q": "环比（季度）",
     "QoQ": "环比（季度）",
     "qoq": "环比（季度）",
+    "Qoq": "环比（季度）",
     "sa": "季节调整",
     "nsa": "非季节调整",
     "Estimate": "预期",
@@ -128,8 +147,11 @@ FINANCE_TERM_MAP = {
     "FOMC": "FOMC",  # 保留缩写
     "Fed": "美联储",
     "Fed Schmid Speech": "美联储 施密德 讲话",
+    "fed schmid speech": "美联储 施密德 讲话",
     "Fed Logan Speech": "美联储 洛根 讲话",
+    "fed logan speech": "美联储 洛根 讲话",
     "Fed Bostic Speech": "美联储 博斯蒂克 讲话",
+    "fed bostic speech": "美联储 博斯蒂克 讲话",
     "Powell": "鲍威尔",  # 如有姓名，可扩展
 }
 
@@ -137,7 +159,7 @@ FINANCE_TERM_MAP = {
 ENGLISH_ABBREVIATIONS = [
     "CPI", "PPI", "GDP", "ISM", "PMI", "FOMC", "Fed", "JOLTS",
     "Philly Fed", "Empire State", "FRED", "ECB", "BOJ", "BOE",
-    "CFTC", "S&P", "QoQ", "MoM", "YoY", "Ex", "mom", "yoy", "qoq"  # Ex for Ex Autos 等，可扩展
+    "CFTC", "S&P", "QoQ", "MoM", "YoY", "Ex", "mom", "yoy", "qoq", "gdpnow", "cftc"  # 添加 gdpnow, cftc 等
 ]
 
 def load_settings():
@@ -155,25 +177,32 @@ def save_settings():
 def clean_title(title):
     """Remove parentheses reference period e.g., "CPI m/m (Oct/25)" -> "CPI m/m" """
     title = re.sub(r'\s*\([^)]*\)', '', title).strip()
-    # 标准化大小写以匹配字典（部分小写）
-    title = title.lower().replace(' qoq', ' qoq').replace(' mom', ' mom').replace(' yoy', ' yoy')
-    # 部分标准化为字典键
-    title = title.replace('nonfarm productivity qoq', 'nonfarm productivity qoq')
-    title = title.replace('core ppi mom', 'core ppi mom')
-    title = title.replace('producer price index mom', 'producer price index mom')
-    title = title.replace('retail sales ex autos mom', 'retail sales ex autos mom')
-    title = title.replace('retail sales ex gas/autos mom', 'retail sales ex gas/autos mom')
-    title = title.replace('retail sales mom', 'retail sales mom')
-    title = title.replace('retail sales yoy', 'retail sales yoy')
-    title = title.replace('business inventories mom', 'business inventories mom')
-    title = title.replace('atlanta fed gdpnow', 'atlanta fed gdpnow')
-    return title.title()  # 恢复标题格式
+    # 强制小写以匹配字典变体
+    lower_title = title.lower()
+    # 扩展替换以覆盖常见变体
+    lower_title = lower_title.replace('nonfarm productivity qoq', 'nonfarm productivity qoq')
+    lower_title = lower_title.replace('core ppi mom', 'core ppi mom')
+    lower_title = lower_title.replace('producer price index mom', 'producer price index mom')
+    lower_title = lower_title.replace('retail sales ex autos mom', 'retail sales ex autos mom')
+    lower_title = lower_title.replace('retail sales ex gas/autos mom', 'retail sales ex gas/autos mom')
+    lower_title = lower_title.replace('retail sales mom', 'retail sales mom')
+    lower_title = lower_title.replace('retail sales yoy', 'retail sales yoy')
+    lower_title = lower_title.replace('business inventories mom', 'business inventories mom')
+    lower_title = lower_title.replace('atlanta fed gdpnow', 'atlanta fed gdpnow')
+    lower_title = lower_title.replace('cftc s&p 500 speculative net positions', 'cftc s&p 500 speculative net positions')
+    lower_title = lower_title.replace('cftc nasdaq 100 speculative net positions', 'cftc nasdaq 100 speculative net positions')
+    lower_title = lower_title.replace('cftc gold speculative net positions', 'cftc gold speculative net positions')
+    lower_title = lower_title.replace('cftc crude oil speculative net positions', 'cftc crude oil speculative net positions')
+    lower_title = lower_title.replace('fed logan speech', 'fed logan speech')
+    lower_title = lower_title.replace('fed bostic speech', 'fed bostic speech')
+    lower_title = lower_title.replace('fed schmid speech', 'fed schmid speech')
+    # 恢复标题格式（首字母大写）
+    return re.sub(r'([a-z])([A-Z])', r'\1 \2', lower_title).title()
 
 def protect_abbreviations(text):
     """保护英文缩写：用临时标记包围，避免翻译"""
     protected = text
     for abbr in ENGLISH_ABBREVIATIONS:
-        # 用 {{abbr}} 标记包围缩写（忽略大小写匹配）
         protected = re.sub(rf'\b{re.escape(abbr)}\b', f'{{{{{abbr}}}}}', protected, flags=re.IGNORECASE)
     return protected
 
@@ -181,41 +210,45 @@ def restore_abbreviations(text, original_text):
     """恢复被保护的缩写"""
     restored = text
     for abbr in ENGLISH_ABBREVIATIONS:
-        marker = f'{{{{{abbr}}}}}'  # 注意大小写
-        # 恢复时匹配原大小写，但简化假设原为大写
+        marker = f'{{{{{abbr}}}}}'
         restored = restored.replace(marker, abbr.upper() if abbr.isupper() else abbr)
     return restored
 
 def translate_finance_text(text, target_lang='zh'):
     """翻译财经文本：优先使用映射字典，后用 Google Translate，确保自然和准确，保留英文缩写"""
-    if not text or not translate_client:
+    if not text:
         return text
+
+    # 强制字典匹配（忽略大小写，全覆盖，即使无 Translate 客户端）
+    for eng_term, zh_term in FINANCE_TERM_MAP.items():
+        if re.search(re.escape(eng_term), text, re.IGNORECASE):
+            text = re.sub(re.escape(eng_term), zh_term, text, flags=re.IGNORECASE)
+
+    if not translate_client:
+        return text.strip()
 
     original_text = text
 
     # 先保护缩写
     protected_text = protect_abbreviations(text)
 
-    # 再尝试字典映射（精确匹配或部分替换，字典已调整为保留缩写）
+    # 字典映射（忽略大小写，全覆盖）
     translated = protected_text
     for eng_term, zh_term in FINANCE_TERM_MAP.items():
-        pattern = re.escape(eng_term)
-        if re.search(pattern, translated, re.IGNORECASE):
-            translated = re.sub(pattern, zh_term, translated, flags=re.IGNORECASE)
+        if re.search(re.escape(eng_term), translated, re.IGNORECASE):
+            translated = re.sub(re.escape(eng_term), zh_term, translated, flags=re.IGNORECASE)
 
-    # 如果仍有英文（非缩写部分），使用 Google Translate 翻译剩余部分（自然语言处理）
-    if re.search(r'[a-zA-Z]{2,}', translated) and '{{{' not in translated:  # 如果还有英文且无保护标记
+    # Google Translate 后备（仅剩余英文部分）
+    if re.search(r'[a-zA-Z]{2,}', translated) and '{{{' not in translated:
         try:
-            # 只翻译非保护部分：拆分句子，翻译无标记的部分
             parts = re.split(r'({{{[^}]+}}})', translated)
             final_parts = []
             for part in parts:
                 if part.startswith('{{{') and part.endswith('}}}'):
-                    final_parts.append(part)  # 保护标记保持
-                elif re.search(r'[a-zA-Z]', part):  # 有英文的部分翻译
+                    final_parts.append(part)
+                elif re.search(r'[a-zA-Z]', part):
                     result = translate_client.translate(part.strip(), target_language=target_lang)
                     translated_part = result['translatedText']
-                    # 后处理：保留数字和符号
                     translated_part = re.sub(r'(\d+(?:\.\d+)?%?)', r'\1', translated_part)
                     final_parts.append(translated_part)
                 else:
@@ -223,7 +256,6 @@ def translate_finance_text(text, target_lang='zh'):
             translated = ''.join(final_parts)
         except Exception as e:
             print(f"Translation error: {e}")
-            translated = protected_text  # 回退
 
     # 恢复缩写
     translated = restore_abbreviations(translated, original_text)
@@ -231,7 +263,7 @@ def translate_finance_text(text, target_lang='zh'):
     return translated.strip()
 
 def fetch_us_events(target_date_str, min_importance=2):
-    """Fetch US events for the specified date (YYYY-MM-DD format)，并翻译结果。FMP date 是 UTC 时间"""
+    """Fetch US events for the specified date (YYYY-MM-DD format)，并翻译结果。FMP date 是 UTC 时间。只保留 BJT 08:00 到次日 08:00 的事件"""
     try:
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
     except ValueError:
@@ -245,7 +277,12 @@ def fetch_us_events(target_date_str, min_importance=2):
         response = requests.get(FMP_URL, params=params, timeout=10)
         response.raise_for_status()
         data_json = response.json()
+        print(f"FMP API returned {len(data_json)} events for {target_date_str} (UTC full day)")  # 日志确认范围
         events = {}
+        # 计算 BJT 范围：target_date 08:00 到次日 08:00
+        start_bjt = BJT.localize(datetime.datetime.combine(target_date, datetime.time(8, 0)))
+        end_bjt = start_bjt + datetime.timedelta(days=1)
+        filtered_count = 0
         for item in data_json:
             if item.get("country") != "US": continue  # Only US
             imp_str = item.get("impact", "Low")
@@ -253,22 +290,27 @@ def fetch_us_events(target_date_str, min_importance=2):
             if imp_num < min_importance: continue
             importance = "★" * imp_num
 
-            event_title = clean_title(item.get("event", "").strip())  # Remove reference period
-            # 翻译标题（保留缩写）
-            translated_title = translate_finance_text(event_title)
-
             dt_str = item.get("date", "")  # YYYY-MM-DD HH:MM:SS UTC
             if not dt_str:
                 continue  # Skip events without date
             try:
                 # 正确解析：dt_str 是 UTC 时间
                 utc_dt = UTC.localize(datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S"))
-                et_dt = utc_dt.astimezone(ET)
                 bjt_dt = utc_dt.astimezone(BJT)
+                # 过滤：只保留 BJT 08:00 到次日 08:00
+                if not (start_bjt <= bjt_dt < end_bjt):
+                    continue
+                filtered_count += 1
+                et_dt = utc_dt.astimezone(ET)
                 time_display = f"{bjt_dt.strftime('%H:%M')} ({et_dt.strftime('%H:%M')} ET)"
             except ValueError as ve:
                 print(f"Time parsing error: {ve}, dt_str: {dt_str}")
-                time_display = f"All Day ({dt_str.split()[0]})"
+                continue
+
+            event_title = clean_title(item.get("event", "").strip())  # Remove reference period
+            # 翻译标题（保留缩写）
+            translated_title = translate_finance_text(event_title)
+            print(f"Translated '{item.get('event')} -> {translated_title}'")  # 日志调试翻译
 
             forecast = item.get("estimate", "") or "—"
             previous = item.get("previous", "") or "—"
@@ -291,6 +333,7 @@ def fetch_us_events(target_date_str, min_importance=2):
                 events[key] = event
         # Convert to list, sort by time (BJT time)
         event_list = sorted(events.values(), key=lambda x: x["time"])
+        print(f"Filtered {filtered_count} events in BJT 08:00 - next 08:00 range")  # 日志过滤计数
         return event_list
     except Exception as e:
         print(f"API Error: {e}")
