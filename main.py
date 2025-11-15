@@ -52,116 +52,6 @@ settings = {}  # {guild_id: {'channel_id': int, 'min_importance': 2}}
 # 初始化 Google Translate 客户端
 translate_client = translate.Client() if GOOGLE_TRANSLATE_KEY != 'your_google_translate_key_here' else None
 
-# 财经术语中英映射字典（确保准确性，基于标准财经翻译，保留英文缩写如 CPI、PPI 等，人名用标准音译；添加大小写变体）
-FINANCE_TERM_MAP = {
-    # 复合术语：保留缩写 + 翻译后缀（添加小写变体）
-    "CPI m/m": "CPI 环比",
-    "CPI y/y": "CPI 同比",
-    "Core CPI m/m": "核心 CPI 环比",
-    "Core CPI y/y": "核心 CPI 同比",
-    "PPI m/m": "PPI 环比",
-    "PPI y/y": "PPI 同比",
-    "Core PPI MoM": "核心 PPI 环比",
-    "Core PPI mom": "核心 PPI 环比",
-    "core ppi mom": "核心 PPI 环比",
-    "Producer Price Index MoM": "生产者物价指数 环比",
-    "Producer Price Index mom": "生产者物价指数 环比",
-    "producer price index mom": "生产者物价指数 环比",
-    "GDP Growth Rate q/q": "GDP 增长率 环比（季度）",
-    "GDP Growth Rate y/y": "GDP 增长率 同比",
-    "Retail Sales m/m": "零售销售 环比",
-    "Retail Sales mom": "零售销售 环比",
-    "retail sales mom": "零售销售 环比",
-    "Retail Sales y/y": "零售销售 同比",
-    "Retail Sales yoy": "零售销售 同比",
-    "retail sales yoy": "零售销售 同比",
-    "Retail Sales Ex Autos MoM": "排除汽车零售销售 环比",
-    "Retail Sales ex autos mom": "排除汽车零售销售 环比",
-    "retail sales ex autos mom": "排除汽车零售销售 环比",
-    "Retail Sales Ex Gas/Autos MoM": "排除汽油/汽车零售销售 环比",
-    "Retail Sales ex gas/autos mom": "排除汽油/汽车零售销售 环比",
-    "retail sales ex gas/autos mom": "排除汽油/汽车零售销售 环比",
-    "Industrial Production m/m": "工业生产 环比",
-    "ISM Manufacturing PMI": "ISM 制造业 PMI",
-    "ISM Services PMI": "ISM 服务业 PMI",
-    "Nonfarm Payrolls": "非农就业人数",
-    "Nonfarm Productivity QoQ": "非农生产率 环比（季度）",
-    "Nonfarm Productivity qoq": "非农生产率 环比（季度）",
-    "nonfarm productivity qoq": "非农生产率 环比（季度）",
-    "Unemployment Rate": "失业率",
-    "FOMC Meeting Minutes": "FOMC 会议纪要",
-    "Fed Interest Rate Decision": "美联储 利率决议",
-    "Building Permits": "建筑许可",
-    "Housing Starts": "房屋开工",
-    "Business Inventories MoM": "商业库存 环比",
-    "Business Inventories mom": "商业库存 环比",
-    "business inventories mom": "商业库存 环比",
-    "Capacity Utilization": "产能利用率",
-    "Consumer Confidence": "消费者信心指数",
-    "Michigan Consumer Sentiment": "密歇根 消费者信心指数",
-    "Durable Goods Orders": "耐用品订单",
-    "Trade Balance": "贸易差额",
-    "Current Account": "经常账户",
-    "Existing Home Sales": "成屋销售",
-    "New Home Sales": "新屋销售",
-    "JOLTS Job Openings": "JOLTS 职位空缺",
-    "Philly Fed Manufacturing Index": "费城联储 制造业指数",
-    "Empire State Manufacturing Index": "帝国州 制造业指数",
-    "Leading Index": "领先指标",
-    "Beige Book": "褐皮书",
-    "Atlanta Fed GDPNow": "亚特兰大联储 GDPNow",
-    "atlanta fed gdpnow": "亚特兰大联储 GDPNow",
-    "Atlanta Fed Gdpnow": "亚特兰大联储 GDPNow",
-    "CFTC S&P 500 speculative net positions": "CFTC S&P 500 投机净仓位",
-    "CFTC Nasdaq 100 speculative net positions": "CFTC 纳斯达克 100 投机净仓位",
-    "CFTC Gold Speculative net positions": "CFTC 黄金 投机净仓位",
-    "CFTC Crude Oil speculative net positions": "CFTC 原油 投机净仓位",
-    "cftc s&p 500 speculative net positions": "CFTC S&P 500 投机净仓位",
-    "cftc nasdaq 100 speculative net positions": "CFTC 纳斯达克 100 投机净仓位",
-    "cftc gold speculative net positions": "CFTC 黄金 投机净仓位",
-    "cftc crude oil speculative net positions": "CFTC 原油 投机净仓位",
-    "Cftc S&P 500 Speculative Net Positions": "CFTC S&P 500 投机净仓位",
-    "Cftc Nasdaq 100 Speculative Net Positions": "CFTC 纳斯达克 100 投机净仓位",
-    "Cftc Gold Speculative Net Positions": "CFTC 黄金 投机净仓位",
-    "Cftc Crude Oil Speculative Net Positions": "CFTC 原油 投机净仓位",
-
-    # 通用后缀/术语
-    "m/m": "环比",
-    "MoM": "环比",
-    "mom": "环比",
-    "y/y": "同比",
-    "YoY": "同比",
-    "yoy": "同比",
-    "q/q": "环比（季度）",
-    "QoQ": "环比（季度）",
-    "qoq": "环比（季度）",
-    "Qoq": "环比（季度）",
-    "sa": "季节调整",
-    "nsa": "非季节调整",
-    "Estimate": "预期",
-    "Previous": "前值",
-    "Actual": "实际值",
-    "Forecast": "预测值",
-
-    # 美联储相关讲话（人名用标准中文音译）
-    "FOMC": "FOMC",  # 保留缩写
-    "Fed": "美联储",
-    "Fed Schmid Speech": "美联储 施密德 讲话",
-    "fed schmid speech": "美联储 施密德 讲话",
-    "Fed Logan Speech": "美联储 洛根 讲话",
-    "fed logan speech": "美联储 洛根 讲话",
-    "Fed Bostic Speech": "美联储 博斯蒂克 讲话",
-    "fed bostic speech": "美联储 博斯蒂克 讲话",
-    "Powell": "鲍威尔",  # 如有姓名，可扩展
-}
-
-# 英文缩写列表（保护不翻译）
-ENGLISH_ABBREVIATIONS = [
-    "CPI", "PPI", "GDP", "ISM", "PMI", "FOMC", "Fed", "JOLTS",
-    "Philly Fed", "Empire State", "FRED", "ECB", "BOJ", "BOE",
-    "CFTC", "S&P", "QoQ", "MoM", "YoY", "Ex", "mom", "yoy", "qoq", "gdpnow", "cftc"  # 添加 gdpnow, cftc 等
-]
-
 def load_settings():
     global settings
     if os.path.exists(SETTINGS_FILE):
@@ -179,97 +69,26 @@ def clean_title(title):
     if not isinstance(title, str):
         title = str(title)
     title = re.sub(r'\s*\([^)]*\)', '', title).strip()
-    # 强制小写以匹配字典变体
-    lower_title = title.lower()
-    # 扩展替换以覆盖常见变体
-    lower_title = lower_title.replace('nonfarm productivity qoq', 'nonfarm productivity qoq')
-    lower_title = lower_title.replace('core ppi mom', 'core ppi mom')
-    lower_title = lower_title.replace('producer price index mom', 'producer price index mom')
-    lower_title = lower_title.replace('retail sales ex autos mom', 'retail sales ex autos mom')
-    lower_title = lower_title.replace('retail sales ex gas/autos mom', 'retail sales ex gas/autos mom')
-    lower_title = lower_title.replace('retail sales mom', 'retail sales mom')
-    lower_title = lower_title.replace('retail sales yoy', 'retail sales yoy')
-    lower_title = lower_title.replace('business inventories mom', 'business inventories mom')
-    lower_title = lower_title.replace('atlanta fed gdpnow', 'atlanta fed gdpnow')
-    lower_title = lower_title.replace('cftc s&p 500 speculative net positions', 'cftc s&p 500 speculative net positions')
-    lower_title = lower_title.replace('cftc nasdaq 100 speculative net positions', 'cftc nasdaq 100 speculative net positions')
-    lower_title = lower_title.replace('cftc gold speculative net positions', 'cftc gold speculative net positions')
-    lower_title = lower_title.replace('cftc crude oil speculative net positions', 'cftc crude oil speculative net positions')
-    lower_title = lower_title.replace('fed logan speech', 'fed logan speech')
-    lower_title = lower_title.replace('fed bostic speech', 'fed bostic speech')
-    lower_title = lower_title.replace('fed schmid speech', 'fed schmid speech')
-    # 恢复标题格式（首字母大写）
-    return re.sub(r'([a-z])([A-Z])', r'\1 \2', lower_title).title()
-
-def protect_abbreviations(text):
-    """保护英文缩写：用临时标记包围，避免翻译"""
-    if not isinstance(text, str):
-        text = str(text)
-    protected = text
-    for abbr in ENGLISH_ABBREVIATIONS:
-        protected = re.sub(rf'\b{re.escape(abbr)}\b', f'{{{{{abbr}}}}}', protected, flags=re.IGNORECASE)
-    return protected
-
-def restore_abbreviations(text, original_text):
-    """恢复被保护的缩写"""
-    if not isinstance(text, str):
-        text = str(text)
-    restored = text
-    for abbr in ENGLISH_ABBREVIATIONS:
-        marker = f'{{{{{abbr}}}}}'
-        restored = restored.replace(marker, abbr.upper() if abbr.isupper() else abbr)
-    return restored
+    return title
 
 def translate_finance_text(text, target_lang='zh'):
-    """翻译财经文本：优先使用映射字典，后用 Google Translate，确保自然和准确，保留英文缩写"""
-    if not text:
-        return text
+    """翻译财经文本：完全使用 Google Translate，确保自然和准确，保留数字和符号"""
+    if not text or not translate_client:
+        return str(text).strip()
 
-    # 确保 text 是字符串
     text = str(text)
-
-    # 强制字典匹配（忽略大小写，全覆盖，即使无 Translate 客户端）
-    for eng_term, zh_term in FINANCE_TERM_MAP.items():
-        if re.search(re.escape(eng_term), text, re.IGNORECASE):
-            text = re.sub(re.escape(eng_term), zh_term, text, flags=re.IGNORECASE)
-
-    if not translate_client:
+    try:
+        result = translate_client.translate(text, target_language=target_lang)
+        translated = result['translatedText']
+        # 后处理：保留数字和符号（如百分比、缩写不改）
+        translated = re.sub(r'(\d+(?:\.\d+)?%?)', r'\1', translated)
+        # 保留常见缩写（如 CPI, PPI）不翻译
+        for abbr in ['CPI', 'PPI', 'GDP', 'ISM', 'PMI', 'FOMC', 'Fed', 'JOLTS', 'CFTC', 'S&P', 'QoQ', 'MoM', 'YoY']:
+            translated = re.sub(rf'\b{re.escape(abbr)}\b', abbr, translated, flags=re.IGNORECASE)
+        return translated.strip()
+    except Exception as e:
+        print(f"Translation error: {e}")
         return text.strip()
-
-    original_text = text
-
-    # 先保护缩写
-    protected_text = protect_abbreviations(text)
-
-    # 字典映射（忽略大小写，全覆盖）
-    translated = protected_text
-    for eng_term, zh_term in FINANCE_TERM_MAP.items():
-        if re.search(re.escape(eng_term), translated, re.IGNORECASE):
-            translated = re.sub(re.escape(eng_term), zh_term, translated, flags=re.IGNORECASE)
-
-    # Google Translate 后备（仅剩余英文部分）
-    if re.search(r'[a-zA-Z]{2,}', translated) and '{{{' not in translated:
-        try:
-            parts = re.split(r'({{{[^}]+}}})', translated)
-            final_parts = []
-            for part in parts:
-                if part.startswith('{{{') and part.endswith('}}}'):
-                    final_parts.append(part)
-                elif re.search(r'[a-zA-Z]', part):
-                    result = translate_client.translate(part.strip(), target_language=target_lang)
-                    translated_part = result['translatedText']
-                    translated_part = re.sub(r'(\d+(?:\.\d+)?%?)', r'\1', translated_part)
-                    final_parts.append(translated_part)
-                else:
-                    final_parts.append(part)
-            translated = ''.join(final_parts)
-        except Exception as e:
-            print(f"Translation error: {e}")
-
-    # 恢复缩写
-    translated = restore_abbreviations(translated, original_text)
-
-    return translated.strip()
 
 def fetch_us_events(target_date_str, min_importance=2):
     """Fetch US events for the specified date (YYYY-MM-DD format)，并翻译结果。FMP date 是 UTC 时间。只保留 BJT 08:00 到次日 08:00 的事件"""
@@ -316,14 +135,14 @@ def fetch_us_events(target_date_str, min_importance=2):
                 print(f"Time parsing error: {ve}, dt_str: {dt_str}")
                 continue
 
-            event_title = clean_title(item.get("event", "").strip())  # Remove reference period
-            # 翻译标题（保留缩写）
+            event_title = clean_title(item.get("event", ""))  # Remove reference period
+            # 翻译标题（完全使用 Google）
             translated_title = translate_finance_text(event_title)
             print(f"Translated '{item.get('event')} -> {translated_title}'")  # 日志调试翻译
 
             forecast = item.get("estimate", "") or "—"
             previous = item.get("previous", "") or "—"
-            # 翻译预测和前值（通常是数字，但如果有描述则翻译，保留缩写）
+            # 翻译预测和前值（通常是数字，但如果有描述则翻译）
             translated_forecast = translate_finance_text(forecast) if forecast != "—" else "—"
             translated_previous = translate_finance_text(previous) if previous != "—" else "—"
 
@@ -333,7 +152,7 @@ def fetch_us_events(target_date_str, min_importance=2):
                 "title": translated_title,  # 使用翻译后标题
                 "forecast": translated_forecast,  # 翻译后
                 "previous": translated_previous,  # 翻译后
-                "orig_title": item.get("event", "").strip(),
+                "orig_title": item.get("event", ""),
                 "date": dt_str  # For de-duplication sorting
             }
             # De-duplicate: take the latest (by date string, take max)
@@ -500,8 +319,7 @@ async def test_push(interaction: discord.Interaction):
     for embed in embeds:
         await channel.send(embed=embed)
     if temp_use:
-        view = SaveChannelView(guild_id, channel_id)
-        await interaction.response.send_message(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=view, ephemeral=True)
+        await interaction.response.send_message(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=SaveChannelView(guild_id, channel_id), ephemeral=True)
     else:
         await interaction.response.send_message(f"Test push sent to {channel.mention}", ephemeral=True)
 
@@ -527,8 +345,7 @@ async def test_date(interaction: discord.Interaction, date: str):
     for embed in embeds:
         await channel.send(embed=embed)
     if temp_use:
-        view = SaveChannelView(guild_id, channel_id)
-        await interaction.response.send_message(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=view, ephemeral=True)
+        await interaction.response.send_message(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=SaveChannelView(guild_id, channel_id), ephemeral=True)
     else:
         await interaction.response.send_message(f"Test {date} calendar sent to {channel.mention}", ephemeral=True)
 
