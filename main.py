@@ -51,6 +51,7 @@ settings = {}  # {guild_id: {'channel_id': int, 'min_importance': 2}}
 
 # 初始化 Google Translate 客户端
 translate_client = translate.Client() if GOOGLE_TRANSLATE_KEY != 'your_google_translate_key_here' else None
+print(f"Translation client: {'Enabled' if translate_client else 'Disabled (check API key)'}")  # 调试日志
 
 def load_settings():
     global settings
@@ -74,10 +75,12 @@ def clean_title(title):
 def translate_finance_text(text, target_lang='zh'):
     """翻译财经文本：完全使用 Google Translate，确保自然和准确，保留数字和符号"""
     if not text or not translate_client:
+        print(f"No translation client for: {text}")  # 调试：无客户端时日志
         return str(text).strip()
 
     text = str(text)
     try:
+        print(f"Using translation for: {text}")  # 调试：使用翻译时日志
         result = translate_client.translate(text, target_language=target_lang)
         translated = result['translatedText']
         # 后处理：保留数字和符号（如百分比、缩写不改）
@@ -85,9 +88,10 @@ def translate_finance_text(text, target_lang='zh'):
         # 保留常见缩写（如 CPI, PPI）不翻译
         for abbr in ['CPI', 'PPI', 'GDP', 'ISM', 'PMI', 'FOMC', 'Fed', 'JOLTS', 'CFTC', 'S&P', 'QoQ', 'MoM', 'YoY']:
             translated = re.sub(rf'\b{re.escape(abbr)}\b', abbr, translated, flags=re.IGNORECASE)
+        print(f"Translated: {text} -> {translated}")  # 调试：翻译结果日志
         return translated.strip()
     except Exception as e:
-        print(f"Translation error: {e}")
+        print(f"Translation error: {e} for {text}")
         return text.strip()
 
 def fetch_us_events(target_date_str, min_importance=2):
@@ -138,7 +142,7 @@ def fetch_us_events(target_date_str, min_importance=2):
             event_title = clean_title(item.get("event", ""))  # Remove reference period
             # 翻译标题（完全使用 Google）
             translated_title = translate_finance_text(event_title)
-            print(f"Translated '{item.get('event')} -> {translated_title}'")  # 日志调试翻译
+            print(f"Final title used: {translated_title}")  # 调试：最终标题日志
 
             forecast = item.get("estimate", "") or "—"
             previous = item.get("previous", "") or "—"
@@ -154,7 +158,7 @@ def fetch_us_events(target_date_str, min_importance=2):
                 "previous": translated_previous,  # 翻译后
                 "orig_title": item.get("event", ""),
                 "date": dt_str,  # For de-duplication sorting
-                "bjt_timestamp": bjt_dt  # 新增：用于 chronological 排序
+                "bjt_timestamp": bjt_dt  # 用于 chronological 排序
             }
             # De-duplicate: take the latest (by date string, take max)
             key = event_title.lower()  # Title lowercase as key
@@ -198,13 +202,12 @@ def format_calendar(events, target_date_str, min_importance):
         return [embed]
     
     if not events:
-        embed = discord.Embed(title="经济日历", description=f"无事件 (★{'★' * (min_importance-1)} 或以上)", color=0x00FF00)
+        embed = discord.Embed(title="今日热点", description=f"无事件 (★{'★' * (min_importance-1)} 或以上)", color=0x00FF00)
         return [embed]
     
-    # 标题调整为覆盖24h范围
-    start_bjt = BJT.localize(datetime.datetime.combine(target_date, datetime.time(8, 0)))
-    end_bjt = start_bjt + datetime.timedelta(days=1)
-    title = f"经济日历 (BJT {start_bjt.strftime('%m/%d %H:%M')} - {end_bjt.strftime('%m/%d %H:%M')})"
+    # 修改标题：今日热点（当前 BJT 日期，如 11月14日）
+    push_date = datetime.datetime.now(BJT).strftime('%m月%d日')
+    title = f"今日热点（{push_date}）"
     
     embed = discord.Embed(title=title, color=0x00FF00)
     
