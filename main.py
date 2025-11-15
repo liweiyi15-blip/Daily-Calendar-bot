@@ -6,10 +6,12 @@ import pytz
 import json
 import os
 import re  # for removing parentheses
+from google.cloud import translate_v2 as translate  # 需要安装 google-cloud-translate 库
 
 # ================== Configuration ==================
 TOKEN = os.getenv('TOKEN') or 'YOUR_BOT_TOKEN_HERE'  # Discord Token
 FMP_KEY = os.getenv('FMP_KEY') or 'your_fmp_key_here'  # FMP API Key (Railway Variables)
+GOOGLE_TRANSLATE_KEY = os.getenv('GOOGLE_TRANSLATE_API_KEY') or 'your_google_translate_key_here'  # Google Translate API Key
 SETTINGS_FILE = 'settings.json'  # Persistent settings file
 
 intents = discord.Intents.default()
@@ -46,6 +48,68 @@ IMPACT_COLORS = {"Low": 0x808080, "Medium": 0xFFA500, "High": 0xFF0000}
 # Global settings (per-guild, supports multiple servers)
 settings = {}  # {guild_id: {'channel_id': int, 'min_importance': 2}}
 
+# 初始化 Google Translate 客户端
+translate_client = translate.Client() if GOOGLE_TRANSLATE_KEY != 'your_google_translate_key_here' else None
+
+# 财经术语中英映射字典（确保准确性，基于标准财经翻译，保留英文缩写如 CPI、PPI 等）
+FINANCE_TERM_MAP = {
+    # 复合术语：保留缩写 + 翻译后缀
+    "CPI m/m": "CPI 环比",
+    "CPI y/y": "CPI 同比",
+    "Core CPI m/m": "核心 CPI 环比",
+    "Core CPI y/y": "核心 CPI 同比",
+    "PPI m/m": "PPI 环比",
+    "PPI y/y": "PPI 同比",
+    "GDP Growth Rate q/q": "GDP 增长率 环比（季度）",
+    "GDP Growth Rate y/y": "GDP 增长率 同比",
+    "Retail Sales m/m": "零售销售 环比",
+    "Retail Sales y/y": "零售销售 同比",
+    "Industrial Production m/m": "工业生产 环比",
+    "ISM Manufacturing PMI": "ISM 制造业 PMI",
+    "ISM Services PMI": "ISM 服务业 PMI",
+    "Nonfarm Payrolls": "非农就业人数",
+    "Unemployment Rate": "失业率",
+    "FOMC Meeting Minutes": "FOMC 会议纪要",
+    "Fed Interest Rate Decision": "美联储 利率决议",
+    "Building Permits": "建筑许可",
+    "Housing Starts": "房屋开工",
+    "Capacity Utilization": "产能利用率",
+    "Consumer Confidence": "消费者信心指数",
+    "Michigan Consumer Sentiment": "密歇根 消费者信心指数",
+    "Durable Goods Orders": "耐用品订单",
+    "Trade Balance": "贸易差额",
+    "Current Account": "经常账户",
+    "Existing Home Sales": "成屋销售",
+    "New Home Sales": "新屋销售",
+    "JOLTS Job Openings": "JOLTS 职位空缺",
+    "Philly Fed Manufacturing Index": "费城联储 制造业指数",
+    "Empire State Manufacturing Index": "帝国州 制造业指数",
+    "Leading Index": "领先指标",
+    "Beige Book": "褐皮书",
+
+    # 通用后缀/术语
+    "m/m": "环比",
+    "y/y": "同比",
+    "q/q": "环比（季度）",
+    "sa": "季节调整",
+    "nsa": "非季节调整",
+    "Estimate": "预期",
+    "Previous": "前值",
+    "Actual": "实际值",
+    "Forecast": "预测值",
+
+    # 美联储相关
+    "FOMC": "FOMC",  # 保留缩写
+    "Fed": "美联储",
+    "Powell": "鲍威尔",  # 如有姓名，可扩展
+}
+
+# 英文缩写列表（保护不翻译）
+ENGLISH_ABBREVIATIONS = [
+    "CPI", "PPI", "GDP", "ISM", "PMI", "FOMC", "Fed", "JOLTS",
+    "Philly Fed", "Empire State", "FRED", "ECB", "BOJ", "BOE"  # 可扩展
+]
+
 def load_settings():
     global settings
     if os.path.exists(SETTINGS_FILE):
@@ -63,8 +127,68 @@ def clean_title(title):
     title = re.sub(r'\s*\([^)]*\)', '', title).strip()
     return title
 
+def protect_abbreviations(text):
+    """保护英文缩写：用临时标记包围，避免翻译"""
+    protected = text
+    for abbr in ENGLISH_ABBREVIATIONS:
+        # 用 {{abbr}} 标记包围缩写（忽略大小写匹配）
+        protected = re.sub(rf'\b{re.escape(abbr)}\b', f'{{{{{abbr}}}}}', protected, flags=re.IGNORECASE)
+    return protected
+
+def restore_abbreviations(text, original_text):
+    """恢复被保护的缩写"""
+    restored = text
+    for abbr in ENGLISH_ABBREVIATIONS:
+        marker = f'{{{{{abbr}}}}}'  # 注意大小写
+        # 恢复时匹配原大小写，但简化假设原为大写
+        restored = restored.replace(marker, abbr)
+    return restored
+
+def translate_finance_text(text, target_lang='zh'):
+    """翻译财经文本：优先使用映射字典，后用 Google Translate，确保自然和准确，保留英文缩写"""
+    if not text or not translate_client:
+        return text
+
+    original_text = text
+
+    # 先保护缩写
+    protected_text = protect_abbreviations(text)
+
+    # 再尝试字典映射（精确匹配或部分替换，字典已调整为保留缩写）
+    translated = protected_text
+    for eng_term, zh_term in FINANCE_TERM_MAP.items():
+        if eng_term.lower() in translated.lower():
+            translated = re.sub(re.escape(eng_term), zh_term, translated, flags=re.IGNORECASE)
+
+    # 如果仍有英文（非缩写部分），使用 Google Translate 翻译剩余部分（自然语言处理）
+    if re.search(r'[a-zA-Z]{2,}', translated) and '{' not in translated:  # 如果还有英文且无保护标记（避免翻译保护部分）
+        try:
+            # 只翻译非保护部分：拆分句子，翻译无标记的部分
+            parts = re.split(r'({{{[^}]+}}})', translated)
+            final_parts = []
+            for part in parts:
+                if part.startswith('{{{') and part.endswith('}}}'):
+                    final_parts.append(part)  # 保护标记保持
+                elif re.search(r'[a-zA-Z]', part):  # 有英文的部分翻译
+                    result = translate_client.translate(part.strip(), target_language=target_lang)
+                    translated_part = result['translatedText']
+                    # 后处理：保留数字和符号
+                    translated_part = re.sub(r'(\d+(?:\.\d+)?%?)', r'\1', translated_part)
+                    final_parts.append(translated_part)
+                else:
+                    final_parts.append(part)
+            translated = ''.join(final_parts)
+        except Exception as e:
+            print(f"Translation error: {e}")
+            translated = protected_text  # 回退
+
+    # 恢复缩写
+    translated = restore_abbreviations(translated, original_text)
+
+    return translated.strip()
+
 def fetch_us_events(target_date_str, min_importance=2):
-    """Fetch US events for the specified date (YYYY-MM-DD format)"""
+    """Fetch US events for the specified date (YYYY-MM-DD format)，并翻译结果"""
     try:
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
     except ValueError:
@@ -87,6 +211,8 @@ def fetch_us_events(target_date_str, min_importance=2):
             importance = "★" * imp_num
 
             event_title = clean_title(item.get("event", "").strip())  # Remove reference period
+            # 翻译标题（保留缩写）
+            translated_title = translate_finance_text(event_title)
 
             dt_str = item.get("date", "")  # YYYY-MM-DD HH:MM:SS
             if not dt_str:
@@ -104,12 +230,18 @@ def fetch_us_events(target_date_str, min_importance=2):
                 print(f"Time parsing error: {ve}, dt_str: {dt_str}")
                 time_display = f"All Day ({date_only})"
 
+            forecast = item.get("estimate", "") or "—"
+            previous = item.get("previous", "") or "—"
+            # 翻译预测和前值（通常是数字，但如果有描述则翻译，保留缩写）
+            translated_forecast = translate_finance_text(forecast) if forecast != "—" else "—"
+            translated_previous = translate_finance_text(previous) if previous != "—" else "—"
+
             event = {
                 "time": time_display,
                 "importance": importance,
-                "title": event_title,
-                "forecast": item.get("estimate", "") or "—",
-                "previous": item.get("previous", "") or "—",
+                "title": translated_title,  # 使用翻译后标题
+                "forecast": translated_forecast,  # 翻译后
+                "previous": translated_previous,  # 翻译后
                 "orig_title": item.get("event", "").strip(),
                 "date": dt_str  # For de-duplication sorting
             }
@@ -150,22 +282,22 @@ def format_calendar(events, target_date_str, min_importance):
     try:
         target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
     except ValueError:
-        embed = discord.Embed(title="News Today", description="Invalid date format (use YYYY-MM-DD)", color=0x00FF00)
+        embed = discord.Embed(title="今日新闻", description="日期格式无效 (使用 YYYY-MM-DD)", color=0x00FF00)
         return [embed]
     
     if not events:
-        embed = discord.Embed(title="News Today", description=f"No events ({'★' * min_importance} or above)", color=0x00FF00)
+        embed = discord.Embed(title="今日新闻", description=f"无事件 (★{'★' * (min_importance-1)} 或以上)", color=0x00FF00)
         return [embed]
     
-    embed = discord.Embed(title="News Today", color=0x00FF00)
+    embed = discord.Embed(title="今日新闻", color=0x00FF00)
     
     for i, e in enumerate(events, 1):
         is_speech = any(keyword.lower() in e['orig_title'].lower() for keyword in SPEECH_KEYWORDS)
-        field_name = f"{e['time']} **{e['title']}**"
+        field_name = f"{e['time']} **{e['title']}**"  # 已翻译标题，缩写保留
         if is_speech:
-            field_value = f"\n**Impact: {e['importance']}**\n\n\n"
+            field_value = f"\n**影响: {e['importance']}**\n\n\n"
         else:
-            field_value = f"\n**Impact: {e['importance']}**\nF: {e['forecast']} | P: {e['previous']}\n\n\n"
+            field_value = f"\n**影响: {e['importance']}**\n预期: {e['forecast']} | 前值: {e['previous']}\n\n\n"  # 使用翻译后值，并调整标签为中文
         embed.add_field(name=field_name, value=field_value, inline=False)
     
     return [embed]
