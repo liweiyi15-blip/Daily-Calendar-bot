@@ -6,12 +6,12 @@ import pytz
 import json
 import os
 import re  # for removing parentheses
-from google.cloud import translate_v2 as translate  # 需要安装 google-cloud-translate 库
+from google.cloud import translate_v2 as translate
+from google.oauth2 import service_account  # 用于 JSON key 认证
 
 # ================== Configuration ==================
 TOKEN = os.getenv('TOKEN') or 'YOUR_BOT_TOKEN_HERE'  # Discord Token
 FMP_KEY = os.getenv('FMP_KEY') or 'your_fmp_key_here'  # FMP API Key (Railway Variables)
-GOOGLE_TRANSLATE_KEY = os.getenv('GOOGLE_TRANSLATE_API_KEY') or 'your_google_translate_key_here'  # Google Translate API Key
 SETTINGS_FILE = 'settings.json'  # Persistent settings file
 
 intents = discord.Intents.default()
@@ -49,9 +49,19 @@ IMPACT_COLORS = {"Low": 0x808080, "Medium": 0xFFA500, "High": 0xFF0000}
 # Global settings (per-guild, supports multiple servers)
 settings = {}  # {guild_id: {'channel_id': int, 'min_importance': 2}}
 
-# 初始化 Google Translate 客户端
-translate_client = translate.Client() if GOOGLE_TRANSLATE_KEY != 'your_google_translate_key_here' else None
-print(f"Translation client: {'Enabled' if translate_client else 'Disabled (check API key)'}")  # 调试日志
+# 初始化 Google Translate 客户端（使用你的翻译 bot 方式：JSON key 字符串）
+json_key = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+if json_key:
+    try:
+        credentials = service_account.Credentials.from_service_account_info(json.loads(json_key))
+        translate_client = translate.Client(credentials=credentials)
+        print('SDK初始化成功')  # 你的日志
+    except Exception as e:
+        print(f'SDK初始化失败: {e}')
+        translate_client = None
+else:
+    print('JSON Key 未设置')
+    translate_client = None
 
 def load_settings():
     global settings
@@ -75,23 +85,30 @@ def clean_title(title):
 def translate_finance_text(text, target_lang='zh'):
     """翻译财经文本：完全使用 Google Translate，确保自然和准确，保留数字和符号"""
     if not text or not translate_client:
-        print(f"No translation client for: {text}")  # 调试：无客户端时日志
+        print(f'No translation client for: {text}')  # 调试日志
         return str(text).strip()
 
     text = str(text)
     try:
-        print(f"Using translation for: {text}")  # 调试：使用翻译时日志
-        result = translate_client.translate(text, target_language=target_lang)
+        print(f'翻译调用: {text}')  # 你的风格日志
+        # 检测语言（可选，财经多英文，直接翻）
+        detection = translate_client.detect_language(text)
+        detected_lang = detection['language']
+        print(f'检测语言: {detected_lang}')
+        if detected_lang.startswith('zh'):
+            print('检测为中文，跳过')
+            return text
+        result = translate_client.translate(text, source_language='en', target_language=target_lang, format_='text')
         translated = result['translatedText']
+        print(f'翻译结果: {translated}')  # 你的日志
         # 后处理：保留数字和符号（如百分比、缩写不改）
         translated = re.sub(r'(\d+(?:\.\d+)?%?)', r'\1', translated)
         # 保留常见缩写（如 CPI, PPI）不翻译
         for abbr in ['CPI', 'PPI', 'GDP', 'ISM', 'PMI', 'FOMC', 'Fed', 'JOLTS', 'CFTC', 'S&P', 'QoQ', 'MoM', 'YoY']:
             translated = re.sub(rf'\b{re.escape(abbr)}\b', abbr, translated, flags=re.IGNORECASE)
-        print(f"Translated: {text} -> {translated}")  # 调试：翻译结果日志
         return translated.strip()
     except Exception as e:
-        print(f"Translation error: {e} for {text}")
+        print(f'翻译异常详情: {e}')  # 你的异常日志
         return text.strip()
 
 def fetch_us_events(target_date_str, min_importance=2):
