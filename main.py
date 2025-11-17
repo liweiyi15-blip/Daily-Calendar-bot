@@ -40,6 +40,17 @@ WEEKDAY_MAP = {
     'Sunday': 'Sunday'
 }
 
+# 中文周几映射
+CHINESE_WEEKDAY_MAP = {
+    'Monday': '周一',
+    'Tuesday': '周二',
+    'Wednesday': '周三',
+    'Thursday': '周四',
+    'Friday': '周五',
+    'Saturday': '周六',
+    'Sunday': '周日'
+}
+
 # Impact mapping (FMP "High" = ★★★, "Medium" = ★★, "Low" = ★)
 IMPACT_MAP = {"Low": 1, "Medium": 2, "High": 3}
 
@@ -227,9 +238,12 @@ def format_calendar(events, target_date_str, min_importance):
         embed = discord.Embed(title="今日热点", description=f"无事件 (★{'★' * (min_importance-1)} 或以上)", color=0x00FF00)
         return [embed]
     
-    # 修改标题：今日热点（当前 BJT 日期，如 11月14日）
-    push_date = datetime.datetime.now(BJT).strftime('%m月%d日')
-    title = f"今日热点（{push_date}）"
+    # 修改标题：今日热点（当前 BJT 日期，如 11月17日/周一）
+    now_bjt = datetime.datetime.now(BJT)
+    date_str = now_bjt.strftime('%m月%d日')
+    english_weekday = now_bjt.strftime('%A')
+    chinese_weekday = CHINESE_WEEKDAY_MAP.get(english_weekday, '未知')
+    title = f"今日热点（{date_str}/{chinese_weekday}）"
     
     embed = discord.Embed(title=title, color=0x00FF00)
     
@@ -284,8 +298,11 @@ async def daily_push():
             # 先 fetch，避免重复调用
             events = fetch_us_events(target_date_str, min_importance)
             embeds = format_calendar(events, target_date_str, min_importance)
-            for embed in embeds:
-                await channel.send(embed=embed)
+            # 每次发布 @everyone（只在第一个 embed）
+            if embeds:
+                await channel.send("@everyone", embed=embeds[0])
+                for embed in embeds[1:]:
+                    await channel.send(embed=embed)
             print(f"Guild {guild_id} pushed {len(events)} events for {target_date_str}")
         except Exception as e:
             print(f"Push error in guild {guild_id}: {e}")
@@ -359,8 +376,11 @@ async def test_push(interaction: discord.Interaction):
     min_imp = settings.get(guild_id, {}).get('min_importance', 2)
     target_date_str = datetime.datetime.now(BJT).date().strftime("%Y-%m-%d")
     embeds = format_calendar(fetch_us_events(target_date_str, min_imp), target_date_str, min_imp)
-    for embed in embeds:
-        await channel.send(embed=embed)
+    # 每次发布 @everyone（只在第一个 embed）
+    if embeds:
+        await channel.send("@everyone", embed=embeds[0])
+        for embed in embeds[1:]:
+            await channel.send(embed=embed)
     if temp_use:
         await interaction.followup.send(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=SaveChannelView(guild_id, channel_id), ephemeral=True)
     else:
@@ -388,8 +408,11 @@ async def test_date(interaction: discord.Interaction, date: str):
         return
     min_imp = settings.get(guild_id, {}).get('min_importance', 2)
     embeds = format_calendar(fetch_us_events(date, min_imp), date, min_imp)
-    for embed in embeds:
-        await channel.send(embed=embed)
+    # 每次发布 @everyone（只在第一个 embed）
+    if embeds:
+        await channel.send("@everyone", embed=embeds[0])
+        for embed in embeds[1:]:
+            await channel.send(embed=embed)
     if temp_use:
         await interaction.followup.send(f"Temporarily pushed to current channel! {channel.mention}\nSet as default?", view=SaveChannelView(guild_id, channel_id), ephemeral=True)
     else:
