@@ -256,6 +256,9 @@ class SaveChannelView(discord.ui.View):
         if self.guild_id not in settings:
             settings[self.guild_id] = {}
         settings[self.guild_id]['channel_id'] = self.channel_id
+        # 添加默认 min_importance
+        if 'min_importance' not in settings[self.guild_id]:
+            settings[self.guild_id]['min_importance'] = 2
         save_settings()
         await interaction.response.send_message("Saved as default channel! Future pushes will go here.", ephemeral=True)
         self.stop()
@@ -266,18 +269,26 @@ async def daily_push():
     # 使用 BJT 当前日期作为 target_date_str（对应 UTC 当天全天，即 BJT 08:00 到次日 08:00 的 US 事件）
     target_date_str = datetime.datetime.now(BJT).date().strftime("%Y-%m-%d")
     for guild_id, guild_settings in settings.items():
-        guild = bot.get_guild(int(guild_id))
-        if not guild:
-            continue
-        channel = guild.get_channel(guild_settings['channel_id'])
-        if not channel:
-            print(f"Guild {guild_id} channel not found")
-            continue
+        try:
+            guild = bot.get_guild(int(guild_id))
+            if not guild:
+                continue
+            channel = guild.get_channel(guild_settings['channel_id'])
+            if not channel:
+                print(f"Guild {guild_id} channel not found")
+                continue
 
-        embeds = format_calendar(fetch_us_events(target_date_str, guild_settings['min_importance']), target_date_str, guild_settings['min_importance'])
-        for embed in embeds:
-            await channel.send(embed=embed)
-        print(f"Guild {guild_id} pushed {len(fetch_us_events(target_date_str, guild_settings['min_importance']))} events for {target_date_str}")
+            # 修复：使用 get() 提供默认值，避免 KeyError
+            min_importance = guild_settings.get('min_importance', 2)
+
+            # 先 fetch，避免重复调用
+            events = fetch_us_events(target_date_str, min_importance)
+            embeds = format_calendar(events, target_date_str, min_importance)
+            for embed in embeds:
+                await channel.send(embed=embed)
+            print(f"Guild {guild_id} pushed {len(events)} events for {target_date_str}")
+        except Exception as e:
+            print(f"Push error in guild {guild_id}: {e}")
 
 @daily_push.before_loop
 async def before_push():
@@ -308,6 +319,9 @@ async def set_channel(interaction: discord.Interaction):
     if guild_id not in settings:
         settings[guild_id] = {}
     settings[guild_id]['channel_id'] = interaction.channel_id
+    # 添加默认 min_importance
+    if 'min_importance' not in settings[guild_id]:
+        settings[guild_id]['min_importance'] = 2
     save_settings()
     await interaction.response.send_message(f"Set push channel to: {interaction.channel.mention}", ephemeral=True)
 
