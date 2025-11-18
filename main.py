@@ -31,7 +31,6 @@ WEEKDAY_MAP = {'Monday': '周一', 'Tuesday': '周二', 'Wednesday': '周三', '
                'Friday': '周五', 'Saturday': '周六', 'Sunday': '周日'}
 
 IMPACT_MAP = {"Low": 1, "Medium": 2, "High": 3}
-IMPACT_COLORS = {"Low": 0x808080, "Medium": 0xFFA500, "High": 0xFF0000}
 
 # {guild_id (int): {'channel_id': int, 'min_importance': int}}
 settings = {}
@@ -55,7 +54,6 @@ def load_settings():
     if os.path.exists(SETTINGS_FILE):
         with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
             raw = json.load(f)
-            # 转为 int key
             settings = {int(k): v for k, v in raw.items()}
     else:
         settings = {}
@@ -169,14 +167,14 @@ def format_calendar(events, target_date_str, min_importance):
         embed.add_field(name=field_name, value=field_value, inline=False)
     return [embed]
 
-# ===================== 关键：每分钟检查的定时任务 =====================
+# ===================== 定时任务：每天8点推送 =====================
 @tasks.loop(minutes=1)
 async def daily_push():
     await bot.wait_until_ready()
 
     now_bjt = datetime.datetime.now(BJT)
 
-    # 每10分钟打印一次心跳（日志不刷屏）
+    # 每10分钟打印一次心跳
     if now_bjt.minute % 10 == 0 and now_bjt.second < 10:
         print(f"✅ 心跳正常 - 北京时间 {now_bjt.strftime('%Y-%m-%d %H:%M:%S')} - 已加载 {len(settings)} 个服务器")
 
@@ -184,14 +182,13 @@ async def daily_push():
     if now_bjt.hour == 8 and 0 <= now_bjt.minute < 5:
         today_str = now_bjt.strftime("%Y-%m-%d")
         lock_file = f"last_push_{today_str}.lock"
-
         if os.path.exists(lock_file):
-            return  # 今天已经推过了
+            return
         open(lock_file, "w").close()
 
         print(f"【{now_bjt.strftime('%H:%M')}】开始推送今日经济日历！")
 
-        for guild_id, guild_settings in settings.items():
+        for guild_id, guild_settings in list(settings.items()):
             try:
                 guild = bot.get_guild(guild_id)
                 if not guild:
@@ -210,7 +207,24 @@ async def daily_push():
                         await channel.send(embed=emb)
                     print(f"已推送 → {guild.name} ({guild_id})，{len(events)} 条事件")
             except Exception as e:
-                print(f"推送失败 guild { (guild_id) }: {e}")
+                print(f"推送失败 guild {guild_id}: {e}")
+
+# ===================== 按钮视图 =====================
+class SaveChannelView(discord.ui.View):
+    def __init__(self, guild_id: int, channel_id: int):
+        super().__init__(timeout=300)
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+
+    @discord.ui.button(label="设为默认频道", style=discord.ButtonStyle.primary)
+    async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.guild_id not in settings:
+            settings[self.guild_id] = {}
+        settings[self.guild_id]['channel_id'] = self.channel_id
+        settings[self.guild_id]['min_importance'] = settings[self.guild_id].get('min_importance', 2)
+        save_settings()
+        await interaction.response.send_message("已成功设为默认推送频道！", ephemeral=True)
+        self.stop()
 
 # ===================== 事件 & 命令 =====================
 @bot.event
@@ -225,23 +239,6 @@ async def on_ready():
         print(f"同步了 {len(synced)} 个斜杠命令")
     except Exception as e:
         print(f"命令同步失败: {e}")
-
-class SaveChannelView(discord.ui.View):
-    def __init__(self, guild_id: int, channel_id: int):
-        super().__init__(timeout=300)
-        self.guild_id = guild_id
-        self.channel_id = channel_id
-
-    @discord.ui.button(label="设为默认频道", style=discord.ButtonStyle.primary)
-    async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.guild_id not in settings:
-            settings[self.guild_id] = {}
-        settings[self.guild_id]['channel_id'] = self.channel_id
-        if 'min_importance' not in settings[self.guild_id]:
-            settings[self.guild_id]['min_importance'] = 2
-        save_settings()
-        await interaction.response.send_message("已设为默认推送频道！", ephemeral=True)
-        self.stop()
 
 @bot.tree.command(name="set_channel", description="设置推送频道（当前频道）")
 async def set_channel(interaction: discord.Interaction):
@@ -268,32 +265,45 @@ async def set_importance(interaction: discord.Interaction, level: discord.app_co
 @bot.tree.command(name="test_push", description="手动测试今日日历")
 async def test_push(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
+    
     gid = interaction.guild_id
-    channel = interaction.channel
-    temp = False
-    if gid in settings and settings[gid].get('channel_id'):
-        channel = interaction.guild.get_channel(settings[gid]['channel_id']) or channel
-    else:
-        temp = True
-
     min_imp = settings.get(gid, {}).get('min_importance', 2)
     today = datetime.datetime.now(BJT).strftime("%Y-%m-%d")
+    
+    # 决定推送目标频道
+    target_channel = interaction.channel
+    need_save_view = False
+    
+    if gid in settings and settings[gid].get('channel_id'):
+        saved_channel = interaction.guild.get_channel(settings[gid]['channel_id'])
+        if saved_channel:
+            target_channel = saved_channel
+        else:
+            need_save_view = True
+    else:
+        need_save_view = True
+
+    # 获取并推送
     events = fetch_us_events(today, min_imp)
     embeds = format_calendar(events, today, min_imp)
 
     if embeds:
-        await channel.send("@everyone 测试推送", embed=embeds[0])
-        for e in embeds[1:]:
-            await channel.send(embed=e)
+        await target_channel.send("@everyone", embed=embeds[0])
+        for emb in embeds[1:]:
+            await target_channel.send(embed=emb)
 
-    msg = "测试推送完成！" if not temp else f"临时推送到当前频道，设为默认？"
-    view = SaveChannelView(gid, interaction.channel_id) if temp else None
-    await interaction.followup.send(msg, view=view, ephemeral=True)
+    # 回复用户
+    if need_save_view:
+        view = SaveChannelView(gid, interaction.channel_id)
+        await interaction.followup.send("已推送到当前频道，要设为默认推送频道吗？", view=view, ephemeral=True)
+    else:
+        await interaction.followup.send(f"推送完成，已发送到默认频道 {target_channel.mention}", ephemeral=True)
 
 @bot.tree.command(name="disable_push", description="关闭本服务器推送")
 async def disable_push(interaction: discord.Interaction):
-    if interaction.guild_id in settings:
-        del settings[interaction.guild_id]
+    gid = interaction.guild_id
+    if gid in settings:
+        del settings[gid]
         save_settings()
         await interaction.response.send_message("已关闭本服务器推送", ephemeral=True)
     else:
