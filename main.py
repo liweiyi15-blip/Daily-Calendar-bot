@@ -12,7 +12,7 @@ from google.oauth2 import service_account
 # ================== Configuration ==================
 TOKEN = os.getenv('TOKEN') or 'YOUR_BOT_TOKEN_HERE'
 FMP_KEY = os.getenv('FMP_KEY') or 'your_fmp_key_here'
-SETTINGS_FILE = '/data/settings.json'  # 永久存储
+SETTINGS_FILE = '/data/settings.json'  # 永久存储路径
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -36,7 +36,7 @@ IMPACT_MAP = {"Low": 1, "Medium": 2, "High": 3}
 
 settings = {}
 
-# Google Translate
+# Google Translate 初始化（保持不变）
 json_key = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
 if json_key:
     try:
@@ -50,72 +50,49 @@ else:
     print('未设置 GOOGLE_APPLICATION_CREDENTIALS')
     translate_client = None
 
-def load_settings():
-    global settings
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                raw = json.load(f)
-                settings = {int(k): v for k, v in raw.items()}
-            print(f"成功加载 settings.json（{len(settings)} 个服务器）")
-        except Exception as e:
-            print(f"加载 settings.json 失败: {e}")
-            settings = {}
-    else:
-        print("未找到 settings.json，使用空设置")
-        settings = {}
+# load_settings / save_settings / clean_title / translate_finance_text / fetch_us_events / format_calendar
+# （这些函数全部保持你原来最终版不变，这里省略以免太长）
 
-def save_settings():
+# ===================== 关键：强制同步斜杠命令 =====================
+@bot.event
+async def on_ready():
+    load_settings()
+    print(f'Bot 上线: {bot.user}')
+
+    # 启动每日推送任务
+    if not daily_push.is_running():
+        daily_push.start()
+
+    # 强制同步斜杠命令（解决 CommandNotFound）
     try:
-        os.makedirs('/data', exist_ok=True)
-        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, indent=4, ensure_ascii=False)
-        print("settings.json 已保存到 /data")
+        synced = await bot.tree.sync()
+        print(f"已强制同步 {len(synced)} 个斜杠命令（全局）")
     except Exception as e:
-        print(f"保存 settings.json 失败: {e}")
+        print(f"命令同步失败: {e}")
 
-# 其余函数（clean_title, translate_finance_text, fetch_us_events, format_calendar）全部保持不变
-# （为了不刷屏，这里省略，你原来的完全复制进来就行）
+    # 可选：如果你想更快看到命令（只在特定服务器），可以再加一行（替换 YOUR_GUILD_ID）
+    # await bot.tree.sync(guild=discord.Object(id=YOUR_GUILD_ID))
 
-# ===================== 定时任务（已修正 lock_file 路径） =====================
+# ===================== 其余代码全部保持不变 =====================
+# daily_push、SaveChannelView、set_channel、set_importance、test_push、disable_push
+# （直接复制你之前最终版的这些部分）
+
+# 示例 daily_push（记得 lock_file 用 /data）
 @tasks.loop(minutes=1)
 async def daily_push():
     await bot.wait_until_ready()
-
     now_bjt = datetime.datetime.now(BJT)
-
     if now_bjt.minute % 10 == 0 and now_bjt.second < 10:
         print(f"✅ 心跳正常 - 北京时间 {now_bjt.strftime('%Y-%m-%d %H:%M:%S')} - 已加载 {len(settings)} 个服务器")
 
     if now_bjt.hour == 8 and 0 <= now_bjt.minute < 5:
         today_str = now_bjt.strftime("%Y-%m-%d")
-        lock_file = f"/data/last_push_{today_str}.lock"  # ← 已修正到 /data
+        lock_file = f"/data/last_push_{today_str}.lock"
         if os.path.exists(lock_file):
             return
         open(lock_file, "w").close()
-
         print(f"【{now_bjt.strftime('%H:%M')}】开始推送今日经济日历！")
-
-        for guild_id, guild_settings in list(settings.items()):
-            try:
-                guild = bot.get_guild(guild_id)
-                if not guild: continue
-                channel = guild.get_channel(guild_settings.get('channel_id'))
-                if not channel: continue
-
-                min_imp = guild_settings.get('min_importance', 2)
-                events = fetch_us_events(today_str, min_imp)
-                embeds = format_calendar(events, today_str, min_imp)
-
-                if embeds:
-                    await channel.send(embed=embeds[0])
-                    for emb in embeds[1:]:
-                        await channel.send(embed=emb)
-                    print(f"已推送 → {guild.name}，{len(events)} 条事件")
-            except Exception as e:
-                print(f"推送失败 guild {guild_id}: {e}")
-
-# 其余 on_ready、命令等全部保持你原来最终版不变
+        # 推送逻辑保持不变...
 
 if __name__ == "__main__":
     bot.run(TOKEN)
