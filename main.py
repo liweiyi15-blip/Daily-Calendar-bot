@@ -12,7 +12,7 @@ from google.oauth2 import service_account
 # ================== Configuration ==================
 TOKEN = os.getenv('TOKEN') or 'YOUR_BOT_TOKEN_HERE'
 FMP_KEY = os.getenv('FMP_KEY') or 'your_fmp_key_here'
-SETTINGS_FILE = '/data/settings.json'  # 永久存储路径
+SETTINGS_FILE = '/data/settings.json'  # 永久存储
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -50,7 +50,7 @@ else:
     print('未设置 GOOGLE_APPLICATION_CREDENTIALS')
     translate_client = None
 
-# ================== 永久存储函数（必须在 on_ready 之前定义） ==================
+# ================== 永久存储函数 ==================
 def load_settings():
     global settings
     if os.path.exists(SETTINGS_FILE):
@@ -198,18 +198,18 @@ class SaveChannelView(discord.ui.View):
         await interaction.response.send_message("已成功设为默认推送频道！", ephemeral=True)
         self.stop()
 
-# ================== 定时任务 ==================
+# ================== 定时任务（含心跳 + lock 文件） ==================
 @tasks.loop(minutes=1)
 async def daily_push():
     await bot.wait_until_ready()
 
     now_bjt = datetime.datetime.now(BJT)
 
-    # 每10分钟心跳
+    # 每10分钟打印一次心跳
     if now_bjt.minute % 10 == 0 and now_bjt.second < 10:
         print(f"✅ 心跳正常 - 北京时间 {now_bjt.strftime('%Y-%m-%d %H:%M:%S')} - 已加载 {len(settings)} 个服务器")
 
-    # 每天08:00~08:04推送一次
+    # 每天08:00~08:04 推送一次
     if now_bjt.hour == 8 and 0 <= now_bjt.minute < 5:
         today_str = now_bjt.strftime("%Y-%m-%d")
         lock_file = f"/data/last_push_{today_str}.lock"
@@ -240,14 +240,11 @@ async def daily_push():
             except Exception as e:
                 print(f"推送失败 guild {guild_id}: {e}")
 
-# ================== on_ready（强制同步命令） ==================
+# ================== on_ready（三保险启动 + 强制同步） ==================
 @bot.event
 async def on_ready():
     load_settings()
     print(f'Bot 上线: {bot.user}')
-
-    if not daily_push.is_running():
-        daily_push.start()
 
     # 强制同步斜杠命令
     try:
@@ -255,6 +252,21 @@ async def on_ready():
         print(f"已强制同步 {len(synced)} 个斜杠命令")
     except Exception as e:
         print(f"命令同步失败: {e}")
+
+    # 三保险启动 daily_push
+    if not daily_push.is_running():
+        daily_push.start()
+        print("daily_push 任务已启动")
+    else:
+        print("daily_push 已经在运行")
+
+    # 保底：5秒后再次检查
+    async def ensure_task():
+        await discord.utils.sleep_until(datetime.datetime.now(UTC) + datetime.timedelta(seconds=5))
+        if not daily_push.is_running():
+            daily_push.start()
+            print("【保底】daily_push 已启动")
+    bot.loop.create_task(ensure_task())
 
 # ================== 斜杠命令 ==================
 @bot.tree.command(name="set_channel", description="设置推送频道（当前频道）")
