@@ -12,7 +12,7 @@ from google.oauth2 import service_account
 # ================== Configuration ==================
 TOKEN = os.getenv('TOKEN') or 'YOUR_BOT_TOKEN_HERE'
 FMP_KEY = os.getenv('FMP_KEY') or 'your_fmp_key_here'
-SETTINGS_FILE = '/data/settings.json'   # ← 关键：永久存储路径
+SETTINGS_FILE = '/data/settings.json'  # ← 关键：永久存储路径
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -60,6 +60,7 @@ def load_settings():
             print(f"成功加载 settings.json（{len(settings)} 个服务器）")
         except Exception as e:
             print(f"加载 settings.json 失败: {e}")
+            settings = {}
     else:
         print("未找到 settings.json，使用空设置")
         settings = {}
@@ -178,6 +179,22 @@ def format_calendar(events, target_date_str, min_importance):
         embed.add_field(name=field_name, value=field_value, inline=False)
     return [embed]
 
+class SaveChannelView(discord.ui.View):
+    def __init__(self, guild_id: int, channel_id: int):
+        super().__init__(timeout=300)
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+
+    @discord.ui.button(label="设为默认频道", style=discord.ButtonStyle.primary)
+    async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.guild_id not in settings:
+            settings[self.guild_id] = {}
+        settings[self.guild_id]['channel_id'] = self.channel_id
+        settings[self.guild_id]['min_importance'] = settings[self.guild_id].get('min_importance', 2)
+        save_settings()
+        await interaction.response.send_message("已成功设为默认推送频道！", ephemeral=True)
+        self.stop()
+
 # ===================== 定时任务 =====================
 @tasks.loop(minutes=1)
 async def daily_push():
@@ -185,14 +202,14 @@ async def daily_push():
 
     now_bjt = datetime.datetime.now(BJT)
 
-    # 每10分钟心跳
+    # 每10分钟打印一次心跳
     if now_bjt.minute % 10 == 0 and now_bjt.second < 10:
         print(f"✅ 心跳正常 - 北京时间 {now_bjt.strftime('%Y-%m-%d %H:%M:%S')} - 已加载 {len(settings)} 个服务器")
 
-    # 每天08:00~08:04推送一次
+    # 每天北京时间 08:00~08:04 推送一次
     if now_bjt.hour == 8 and 0 <= now_bjt.minute < 5:
         today_str = now_bjt.strftime("%Y-%m-%d")
-        lock_file = f"/data/last_push_{today_str}.lock"   # ← 也改到 /data
+        lock_file = f"/data/last_push_{today_str}.lock"  # ← 也存到 /data
         if os.path.exists(lock_file):
             return
         open(lock_file, "w").close()
@@ -220,22 +237,7 @@ async def daily_push():
             except Exception as e:
                 print(f"推送失败 guild {guild_id}: {e}")
 
-class SaveChannelView(discord.ui.View):
-    def __init__(self, guild_id: int, channel_id: int):
-        super().__init__(timeout=300)
-        self.guild_id = guild_id
-        self.channel_id = channel_id
-
-    @discord.ui.button(label="设为默认频道", style=discord.ButtonStyle.primary)
-    async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.guild_id not in settings:
-            settings[self.guild_id] = {}
-        settings[self.guild_id]['channel_id'] = self.channel_id
-        settings[self.guild_id]['min_importance'] = settings[self.guild_id].get('min_importance', 2)
-        save_settings()
-        await interaction.response.send_message("已成功设为默认推送频道！", ephemeral=True)
-        self.stop()
-
+# ===================== 事件 & 命令 =====================
 @bot.event
 async def on_ready():
     load_settings()
