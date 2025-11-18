@@ -202,7 +202,8 @@ async def daily_push():
                 embeds = format_calendar(events, today_str, min_imp)
 
                 if embeds:
-                    await channel.send("@everyone", embed=embeds[0])
+                    # 已去掉 @everyone
+                    await channel.send(embed=embeds[0])
                     for emb in embeds[1:]:
                         await channel.send(embed=emb)
                     print(f"已推送 → {guild.name} ({guild_id})，{len(events)} 条事件")
@@ -288,7 +289,8 @@ async def test_push(interaction: discord.Interaction):
     embeds = format_calendar(events, today, min_imp)
 
     if embeds:
-        await target_channel.send("@everyone", embed=embeds[0])
+        # 已去掉 @everyone
+        await target_channel.send(embed=embeds[0])
         for emb in embeds[1:]:
             await target_channel.send(embed=emb)
 
