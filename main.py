@@ -12,7 +12,7 @@ from google.oauth2 import service_account
 # ================== Configuration ==================
 TOKEN = os.getenv('TOKEN') or 'YOUR_BOT_TOKEN_HERE'
 FMP_KEY = os.getenv('FMP_KEY') or 'your_fmp_key_here'
-SETTINGS_FILE = '/data/settings.json'  # 永久存储
+SETTINGS_FILE = '/data/settings.json'  # 永久存储路径
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -198,18 +198,17 @@ class SaveChannelView(discord.ui.View):
         await interaction.response.send_message("已成功设为默认推送频道！", ephemeral=True)
         self.stop()
 
-# ================== 定时任务（含心跳 + lock 文件） ==================
+# ================== 定时任务（强制每分钟打印心跳） ==================
 @tasks.loop(minutes=1)
 async def daily_push():
     await bot.wait_until_ready()
 
     now_bjt = datetime.datetime.now(BJT)
 
-    # 每10分钟打印一次心跳
-    if now_bjt.minute % 10 == 0 and now_bjt.second < 10:
-        print(f"✅ 心跳正常 - 北京时间 {now_bjt.strftime('%Y-%m-%d %H:%M:%S')} - 已加载 {len(settings)} 个服务器")
+    # 【强制每分钟打印一次心跳】确认任务在跑，看到了就改回每10分钟也行
+    print(f"✅ 心跳正常 - 北京时间 {now_bjt.strftime('%Y-%m-%d %H:%M:%S')} - 已加载 {len(settings)} 个服务器")
 
-    # 每天08:00~08:04 推送一次
+    # 每天北京时间 08:00~08:04 推送一次
     if now_bjt.hour == 8 and 0 <= now_bjt.minute < 5:
         today_str = now_bjt.strftime("%Y-%m-%d")
         lock_file = f"/data/last_push_{today_str}.lock"
@@ -260,7 +259,7 @@ async def on_ready():
     else:
         print("daily_push 已经在运行")
 
-    # 保底：5秒后再次检查
+    # 保底 5 秒后再检查一次
     async def ensure_task():
         await discord.utils.sleep_until(datetime.datetime.now(UTC) + datetime.timedelta(seconds=5))
         if not daily_push.is_running():
