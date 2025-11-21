@@ -13,6 +13,7 @@ from google.oauth2 import service_account
 # ================== Configuration ==================
 TOKEN = os.getenv('TOKEN')
 FMP_KEY = os.getenv('FMP_KEY')
+# Railway 必须挂载 Volume 到 /data 才能持久化保存设置
 SETTINGS_FILE = '/data/settings.json' 
 
 intents = discord.Intents.default()
@@ -30,7 +31,7 @@ FMP_EARNINGS_URL = "https://financialmodelingprep.com/api/v3/earning_calendar"
 FMP_QUOTE_URL = "https://financialmodelingprep.com/api/v3/quote/"
 
 # Settings
-MIN_MARKET_CAP = 10_000_000_000  # 财报过滤门槛：100亿美金市值 (防止垃圾股刷屏)
+MIN_MARKET_CAP = 10_000_000_000  # 市值过滤：只显示 100 亿美元以上
 SPEECH_KEYWORDS = ["Speech", "Testimony", "Remarks", "Press Conference", "Hearing"]
 WEEKDAY_MAP = {
     'Monday': '周一', 'Tuesday': '周二', 'Wednesday': '周三', 'Thursday': '周四',
@@ -42,7 +43,9 @@ settings = {}
 translate_client = None
 
 # ================== Google Translate 初始化 ==================
+# 优先读取 Railway 环境变量中的 JSON 字符串
 google_json_str = os.getenv('GOOGLE_JSON_CONTENT') 
+# 其次读取本地文件路径
 google_key_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
 
 try:
@@ -135,7 +138,6 @@ async def fetch_us_events(target_date_str, min_importance=2):
             raw_title = item.get("event", "")
             title = clean_title(raw_title)
             
-            # 异步调用中尽量避免同步的翻译，但这里量不大暂且保留
             translated_title = translate_finance_text(title)
             forecast = translate_finance_text(item.get("estimate", "") or "—")
             previous = translate_finance_text(item.get("previous", "") or "—")
@@ -155,9 +157,7 @@ async def fetch_us_events(target_date_str, min_importance=2):
 
 # ================== 核心逻辑：财报获取 ==================
 async def fetch_earnings(date_str):
-    """
-    获取指定日期的财报，并按市值过滤
-    """
+    """获取指定日期的财报，并按市值过滤"""
     params = {"from": date_str, "to": date_str, "apikey": FMP_KEY}
     async with aiohttp.ClientSession() as session:
         try:
@@ -168,13 +168,13 @@ async def fetch_earnings(date_str):
             
             if not calendar_data: return {}
 
-            # 2. 提取 Symbol，去重
+            # 2. 提取 Symbol 并去重
             symbols = list(set([item['symbol'] for item in calendar_data if item.get('symbol')]))
             if not symbols: return {}
 
-            # 3. 分批查询市值 (FMP Batch Quote 限制)
+            # 3. 分批查询市值 (FMP API 限制 URL 长度)
             important_stocks = []
-            chunk_size = 50 # 每次查询50个，避免URL过长
+            chunk_size = 50 
             
             for i in range(0, len(symbols), chunk_size):
                 chunk = symbols[i:i + chunk_size]
@@ -192,7 +192,9 @@ async def fetch_earnings(date_str):
                                         'symbol': q['symbol'],
                                         'name': q.get('name', q['symbol']),
                                         'marketCap': mcap,
-                                        # 从原始 calendar_data 找回发布时间 (bmo/amc)
+                                        'price': q.get('price', 0),
+                                        'change': q.get('changesPercentage', 0),
+                                        # 找回发布时间 (bmo/amc)
                                         'time': next((x['time'] for x in calendar_data if x['symbol'] == q['symbol']), 'bmo')
                                     })
                 except Exception as e:
@@ -203,12 +205,13 @@ async def fetch_earnings(date_str):
 
             # 4. 分组排序
             result = {'bmo': [], 'amc': [], 'other': []}
-            # 按市值倒序排列
+            # 按市值倒序
             important_stocks.sort(key=lambda x: x['marketCap'], reverse=True)
 
             for stock in important_stocks:
                 time_code = stock['time'].lower()
-                entry = f"**{stock['symbol']}** ({stock['name']})"
+                # 格式: AAPL (Apple Inc)
+                entry = f"**{stock['symbol']}** - {stock['name']}"
                 if time_code == 'bmo':
                     result['bmo'].append(entry)
                 elif time_code == 'amc':
@@ -242,56 +245,51 @@ def format_calendar_embed(events, date_str, min_imp):
     return [embed]
 
 def format_earnings_embed(earnings_data, date_str):
-    weekday_cn = WEEKDAY_MAP.get(datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime('%A'), '')
-    title = f"💰 明日重点财报 ({date_str} {weekday_cn})"
+    try:
+        dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+        weekday_cn = WEEKDAY_MAP.get(dt.strftime('%A'), '')
+    except:
+        weekday_cn = ""
+        
+    title = f"💰 重点财报日历 ({date_str} {weekday_cn})"
     
-    # 检查是否为空
-    if not any(earnings_data.values()):
-        return None # 没重要财报就不发了，或者返回一个空提示
+    if not earnings_data or not any(earnings_data.values()):
+        return None 
     
     embed = discord.Embed(title=title, description=f"筛选市值 > {MIN_MARKET_CAP//100000000} 亿美元", color=0xf1c40f)
     
-    if earnings_data['bmo']:
-        content = "\n".join(earnings_data['bmo'][:15]) # 最多显示15个，防止超长
-        if len(earnings_data['bmo']) > 15: content += f"\n...以及其他 {len(earnings_data['bmo'])-15} 家"
+    # 盘前
+    if earnings_data.get('bmo'):
+        items = earnings_data['bmo']
+        content = "\n".join(items[:15])
+        if len(items) > 15: content += f"\n...以及其他 {len(items)-15} 家"
         embed.add_field(name="☀️ 盘前 (Before Open)", value=content, inline=False)
         
-    if earnings_data['amc']:
-        content = "\n".join(earnings_data['amc'][:15])
-        if len(earnings_data['amc']) > 15: content += f"\n...以及其他 {len(earnings_data['amc'])-15} 家"
+    # 盘后
+    if earnings_data.get('amc'):
+        items = earnings_data['amc']
+        content = "\n".join(items[:15])
+        if len(items) > 15: content += f"\n...以及其他 {len(items)-15} 家"
         embed.add_field(name="🌙 盘后 (After Close)", value=content, inline=False)
 
-    if not earnings_data['bmo'] and not earnings_data['amc']:
-        embed.description = "明日无重点大盘股财报"
-        
+    # 其他/未知时间
+    if earnings_data.get('other'):
+        items = earnings_data['other']
+        content = "\n".join(items[:10])
+        if len(items) > 10: content += f"\n...以及其他 {len(items)-10} 家"
+        embed.add_field(name="🕒 时间未定", value=content, inline=False)
+
     return embed
-
-# ================== 按钮视图 ==================
-class SaveChannelView(discord.ui.View):
-    def __init__(self, guild_id: int, channel_id: int):
-        super().__init__(timeout=300)
-        self.guild_id = guild_id
-        self.channel_id = channel_id
-
-    @discord.ui.button(label="设为默认频道", style=discord.ButtonStyle.primary)
-    async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.guild_id not in settings: settings[self.guild_id] = {}
-        settings[self.guild_id]['channel_id'] = self.channel_id
-        save_settings()
-        await interaction.response.send_message("✅ 已成功设为默认推送频道！", ephemeral=True)
-        self.stop()
 
 # ================== 统一主循环 ==================
 @tasks.loop(minutes=1)
 async def main_loop():
     now_bjt = datetime.datetime.now(BJT)
-    current_time = now_bjt.strftime('%H:%M')
     
-    # print(f"💓 Heartbeat: {current_time}") # 调试用，可注释
-
     # ----------------- 任务1: 08:00 发送今日宏观事件 -----------------
     if now_bjt.hour == 8 and 0 <= now_bjt.minute < 5:
         today_str = now_bjt.strftime("%Y-%m-%d")
+        os.makedirs('/data', exist_ok=True)
         lock_file = f"/data/push_event_{today_str}.lock"
         
         if not os.path.exists(lock_file):
@@ -301,7 +299,6 @@ async def main_loop():
             for gid, conf in settings.items():
                 channel = bot.get_channel(conf.get('channel_id'))
                 if not channel: continue
-                
                 try:
                     events = await fetch_us_events(today_str, conf.get('min_importance', 2))
                     embeds = format_calendar_embed(events, today_str, conf.get('min_importance', 2))
@@ -311,20 +308,19 @@ async def main_loop():
 
     # ----------------- 任务2: 20:00 发送明日财报 -----------------
     elif now_bjt.hour == 20 and 0 <= now_bjt.minute < 5:
-        # 计算明天日期
         tomorrow = now_bjt + datetime.timedelta(days=1)
         tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+        os.makedirs('/data', exist_ok=True)
         lock_file = f"/data/push_earnings_{tomorrow_str}.lock"
         
         if not os.path.exists(lock_file):
             with open(lock_file, "w") as f: f.write("locked")
             print(f"🚀 [任务2] 开始推送明日财报: {tomorrow_str}")
             
-            # 为了节省API额度，统一获取一次数据，然后分发
             earnings_data = await fetch_earnings(tomorrow_str)
             embed = format_earnings_embed(earnings_data, tomorrow_str)
             
-            if embed: # 只有当有内容时才发送
+            if embed:
                 for gid, conf in settings.items():
                     channel = bot.get_channel(conf.get('channel_id'))
                     if not channel: continue
@@ -371,20 +367,54 @@ async def set_importance(interaction: discord.Interaction, level: discord.app_co
     save_settings()
     await interaction.response.send_message(f"✅ 最低星级设为 {level.name}", ephemeral=True)
 
-@bot.tree.command(name="test_earnings", description="手动测试：查看明天的财报")
-async def test_earnings(interaction: discord.Interaction):
-    await interaction.response.defer()
-    tomorrow = datetime.datetime.now(BJT) + datetime.timedelta(days=1)
-    date_str = tomorrow.strftime("%Y-%m-%d")
+@bot.tree.command(name="test_push", description="手动测试今日宏观事件")
+async def test_push(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    today = datetime.datetime.now(BJT).strftime("%Y-%m-%d")
+    gid = interaction.guild_id
+    min_imp = settings.get(gid, {}).get('min_importance', 2)
     
-    data = await fetch_earnings(date_str)
-    embed = format_earnings_embed(data, date_str)
+    events = await fetch_us_events(today, min_imp)
+    embeds = format_calendar_embed(events, today, min_imp)
     
-    if embed:
-        await interaction.followup.send(embed=embed)
+    if embeds:
+        await interaction.followup.send(embed=embeds[0])
+        for emb in embeds[1:]: await interaction.followup.send(embed=emb)
     else:
-        await interaction.followup.send(f"📅 {date_str} 暂无重点财报 (市值 > 100亿)", ephemeral=True)
+        await interaction.followup.send("今日无相关事件", ephemeral=True)
 
-# ================== Start ==================
+@bot.tree.command(name="test_earnings", description="测试财报：默认明天，也可指定日期 (格式: 2025-11-21)")
+async def test_earnings(interaction: discord.Interaction, date: str = None):
+    """如果不填 date，默认查明天；填了 date (YYYY-MM-DD) 则查那一天"""
+    await interaction.response.defer()
+    
+    if date:
+        target_date_str = date
+    else:
+        tomorrow = datetime.datetime.now(BJT) + datetime.timedelta(days=1)
+        target_date_str = tomorrow.strftime("%Y-%m-%d")
+    
+    try:
+        data = await fetch_earnings(target_date_str)
+        embed = format_earnings_embed(data, target_date_str)
+        
+        if embed:
+            await interaction.followup.send(embed=embed)
+        else:
+            await interaction.followup.send(f"📅 **{target_date_str}** 暂无重点财报 (市值 > 100亿 USD)", ephemeral=True)
+            
+    except Exception as e:
+        await interaction.followup.send(f"❌ 查询出错: {e}", ephemeral=True)
+
+@bot.tree.command(name="disable_push", description="关闭本服务器推送")
+async def disable_push(interaction: discord.Interaction):
+    gid = interaction.guild_id
+    if gid in settings:
+        del settings[gid]
+        save_settings()
+        await interaction.response.send_message("🚫 已关闭本服务器推送", ephemeral=True)
+    else:
+        await interaction.response.send_message("本服务器未开启推送", ephemeral=True)
+
 if __name__ == "__main__":
     bot.run(TOKEN)
