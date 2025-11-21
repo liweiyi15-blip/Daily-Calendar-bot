@@ -13,7 +13,6 @@ from google.oauth2 import service_account
 # ================== Configuration ==================
 TOKEN = os.getenv('TOKEN')
 FMP_KEY = os.getenv('FMP_KEY')
-# Railway 必须挂载 Volume 到 /data 才能持久化保存设置
 SETTINGS_FILE = '/data/settings.json' 
 
 intents = discord.Intents.default()
@@ -27,11 +26,12 @@ UTC = pytz.UTC
 
 # API Endpoints
 FMP_CAL_URL = "https://financialmodelingprep.com/stable/economic-calendar"
-FMP_EARNINGS_URL = "https://financialmodelingprep.com/api/v3/earning_calendar"
+# [修改] 使用你提供的 stable 接口，而不是 v3
+FMP_EARNINGS_URL = "https://financialmodelingprep.com/stable/earnings-calendar"
 FMP_QUOTE_URL = "https://financialmodelingprep.com/api/v3/quote/"
 
 # Settings
-MIN_MARKET_CAP = 10_000_000_000  # 市值过滤：只显示 100 亿美元以上
+MIN_MARKET_CAP = 10_000_000_000  # 市值过滤：100亿美金
 SPEECH_KEYWORDS = ["Speech", "Testimony", "Remarks", "Press Conference", "Hearing"]
 WEEKDAY_MAP = {
     'Monday': '周一', 'Tuesday': '周二', 'Wednesday': '周三', 'Thursday': '周四',
@@ -43,9 +43,7 @@ settings = {}
 translate_client = None
 
 # ================== Google Translate 初始化 ==================
-# 优先读取 Railway 环境变量中的 JSON 字符串
 google_json_str = os.getenv('GOOGLE_JSON_CONTENT') 
-# 其次读取本地文件路径
 google_key_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
 
 try:
@@ -105,6 +103,14 @@ def translate_finance_text(text, target_lang='zh'):
     except:
         return text
 
+# ================== 辅助：安全打印错误 (隐藏 Key) ==================
+def safe_print_error(prefix, error_obj):
+    """将错误信息中的 API Key 替换为星号后打印"""
+    err_str = str(error_obj)
+    if FMP_KEY:
+        err_str = err_str.replace(FMP_KEY, "******")
+    print(f"{prefix}: {err_str}")
+
 # ================== 核心逻辑：经济日历 ==================
 async def fetch_us_events(target_date_str, min_importance=2):
     try:
@@ -152,13 +158,15 @@ async def fetch_us_events(target_date_str, min_importance=2):
                 events[key] = event
         return sorted(events.values(), key=lambda x: x["bjt_timestamp"])
     except Exception as e:
-        print(f"Events API Error: {e}")
+        safe_print_error("Events API Error", e)
         return []
 
 # ================== 核心逻辑：财报获取 ==================
 async def fetch_earnings(date_str):
     """获取指定日期的财报，并按市值过滤"""
+    # 注意：这里使用了新的 stable 接口
     params = {"from": date_str, "to": date_str, "apikey": FMP_KEY}
+    
     async with aiohttp.ClientSession() as session:
         try:
             # 1. 获取财报名单
@@ -172,7 +180,7 @@ async def fetch_earnings(date_str):
             symbols = list(set([item['symbol'] for item in calendar_data if item.get('symbol')]))
             if not symbols: return {}
 
-            # 3. 分批查询市值 (FMP API 限制 URL 长度)
+            # 3. 分批查询市值
             important_stocks = []
             chunk_size = 50 
             
@@ -192,25 +200,20 @@ async def fetch_earnings(date_str):
                                         'symbol': q['symbol'],
                                         'name': q.get('name', q['symbol']),
                                         'marketCap': mcap,
-                                        'price': q.get('price', 0),
-                                        'change': q.get('changesPercentage', 0),
-                                        # 找回发布时间 (bmo/amc)
                                         'time': next((x['time'] for x in calendar_data if x['symbol'] == q['symbol']), 'bmo')
                                     })
                 except Exception as e:
-                    print(f"Quote fetch error: {e}")
+                    safe_print_error("Quote fetch error", e)
                     continue
                 
-                await asyncio.sleep(0.1) # 避免触发速率限制
+                await asyncio.sleep(0.1)
 
             # 4. 分组排序
             result = {'bmo': [], 'amc': [], 'other': []}
-            # 按市值倒序
             important_stocks.sort(key=lambda x: x['marketCap'], reverse=True)
 
             for stock in important_stocks:
                 time_code = stock['time'].lower()
-                # 格式: AAPL (Apple Inc)
                 entry = f"**{stock['symbol']}** - {stock['name']}"
                 if time_code == 'bmo':
                     result['bmo'].append(entry)
@@ -222,7 +225,7 @@ async def fetch_earnings(date_str):
             return result
 
         except Exception as e:
-            print(f"Fetch Earnings Error: {e}")
+            safe_print_error("Fetch Earnings Error", e)
             return {}
 
 # ================== 格式化函数 ==================
@@ -258,21 +261,18 @@ def format_earnings_embed(earnings_data, date_str):
     
     embed = discord.Embed(title=title, description=f"筛选市值 > {MIN_MARKET_CAP//100000000} 亿美元", color=0xf1c40f)
     
-    # 盘前
     if earnings_data.get('bmo'):
         items = earnings_data['bmo']
         content = "\n".join(items[:15])
         if len(items) > 15: content += f"\n...以及其他 {len(items)-15} 家"
         embed.add_field(name="☀️ 盘前 (Before Open)", value=content, inline=False)
         
-    # 盘后
     if earnings_data.get('amc'):
         items = earnings_data['amc']
         content = "\n".join(items[:15])
         if len(items) > 15: content += f"\n...以及其他 {len(items)-15} 家"
         embed.add_field(name="🌙 盘后 (After Close)", value=content, inline=False)
 
-    # 其他/未知时间
     if earnings_data.get('other'):
         items = earnings_data['other']
         content = "\n".join(items[:10])
@@ -304,7 +304,7 @@ async def main_loop():
                     embeds = format_calendar_embed(events, today_str, conf.get('min_importance', 2))
                     for emb in embeds: await channel.send(embed=emb)
                 except Exception as e:
-                    print(f"推送事件错误 {gid}: {e}")
+                    safe_print_error(f"推送事件错误 {gid}", e)
 
     # ----------------- 任务2: 20:00 发送明日财报 -----------------
     elif now_bjt.hour == 20 and 0 <= now_bjt.minute < 5:
@@ -327,7 +327,7 @@ async def main_loop():
                     try:
                         await channel.send(embed=embed)
                     except Exception as e:
-                        print(f"推送财报错误 {gid}: {e}")
+                        safe_print_error(f"推送财报错误 {gid}", e)
             else:
                 print("明日无重要财报，跳过推送")
 
@@ -385,7 +385,6 @@ async def test_push(interaction: discord.Interaction):
 
 @bot.tree.command(name="test_earnings", description="测试财报：默认明天，也可指定日期 (格式: 2025-11-21)")
 async def test_earnings(interaction: discord.Interaction, date: str = None):
-    """如果不填 date，默认查明天；填了 date (YYYY-MM-DD) 则查那一天"""
     await interaction.response.defer()
     
     if date:
@@ -404,7 +403,9 @@ async def test_earnings(interaction: discord.Interaction, date: str = None):
             await interaction.followup.send(f"📅 **{target_date_str}** 暂无重点财报 (市值 > 100亿 USD)", ephemeral=True)
             
     except Exception as e:
-        await interaction.followup.send(f"❌ 查询出错: {e}", ephemeral=True)
+        # 这里虽然 Interaction 只有你能看到，但也习惯性隐藏 Key
+        safe_msg = str(e).replace(FMP_KEY, "******") if FMP_KEY else str(e)
+        await interaction.followup.send(f"❌ 查询出错: {safe_msg}", ephemeral=True)
 
 @bot.tree.command(name="disable_push", description="关闭本服务器推送")
 async def disable_push(interaction: discord.Interaction):
