@@ -8,49 +8,63 @@ import os
 import re
 import asyncio
 import sys
+from bs4 import BeautifulSoup
+from curl_cffi.requests import AsyncSession # 核心：伪装浏览器绕过 Yahoo 反爬
 from google.cloud import translate_v2 as translate
 from google.oauth2 import service_account
 
-# ================== 日志配置 ==================
+# ================== 1. 系统配置 ==================
+# 强制日志实时输出，防止 Railway 卡顿
 sys.stdout.reconfigure(line_buffering=True)
 
-# ================== Configuration ==================
 TOKEN = os.getenv('TOKEN')
-FMP_KEY = os.getenv('FMP_KEY')
+FMP_KEY = os.getenv('FMP_KEY') # 仅用于宏观日历
 SETTINGS_FILE = '/data/settings.json' 
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Timezones
+# 时区设置
 ET = pytz.timezone('America/New_York')
 BJT = pytz.timezone('Asia/Shanghai')
 UTC = pytz.UTC
 
-# ================== API Endpoints ==================
-# 宏观日历 (Stable)
+# ================== 2. 数据源 URL ==================
+# 宏观日历 (使用 FMP Stable 接口)
 FMP_CAL_URL = "https://financialmodelingprep.com/stable/economic-calendar"
-# 财报日历 (Stable)
-FMP_EARNINGS_URL = "https://financialmodelingprep.com/stable/earnings-calendar"
-# S&P 500 名单
+# 财报日历 (使用 Yahoo 网页爬虫，获取精准盘前盘后)
+YAHOO_CAL_URL = "https://finance.yahoo.com/calendar/earnings"
+# S&P 500 成分股名单 (用于过滤非热门的杂鱼股)
 GITHUB_SP500_URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
 
-# ================== 🌟 核心策略 ==================
+# ================== 3. 核心关注名单 (带🔥) ==================
+# 这些股票无论是不是标普500，只要发财报就强制推送，并打上火焰标记
 HOT_STOCKS = {
-    "RKLB", "COIN", "NVDA", "AMD", "INTC", "TSM", "ASML", "ARM", "AVGO", "QCOM", "MU", "SMCI",
-    "AAPL", "MSFT", "AMZN", "GOOG", "GOOGL", "META", "TSLA", "NFLX", "CRM", "ADBE", "ORCL",
-    "PLTR", "U", "DKNG", "ROKU", "SHOP", "SQ", "ZM", "CRWD", "NET", "SNOW", "DDOG", "TEAM", "ZS", "PANW",
-    "MSTR", "MARA", "RIOT", "CLSK", "HOOD",
+    # === 用户特别关注 ===
+    "RKLB", "COIN", "NVDA", "TSLA", "HOOD", "PLTR",
+    # === 芯片/半导体 ===
+    "AMD", "INTC", "TSM", "ASML", "ARM", "AVGO", "QCOM", "MU", "SMCI", "MRVL",
+    # === 科技巨头 ===
+    "AAPL", "MSFT", "AMZN", "GOOG", "GOOGL", "META", "NFLX", "CRM", "ADBE", "ORCL",
+    # === 热门成长/SaaS ===
+    "U", "DKNG", "ROKU", "SHOP", "SQ", "ZM", "CRWD", "NET", "SNOW", "DDOG", "TEAM", "ZS", "PANW",
+    # === 加密货币 ===
+    "MSTR", "MARA", "RIOT", "CLSK",
+    # === 太空/新能源/硬科技 ===
     "ASTS", "SPCE", "IONQ", "RIVN", "LCID", "NIO", "XPEV", "LI", "ENPH", "CVNA",
-    "SOFI", "UPST", "AFRM", "PYPL", "GME", "AMC", "RDDT", "DJT",
+    # === 金融科技 ===
+    "SOFI", "UPST", "AFRM", "PYPL",
+    # === WSB/网红 ===
+    "GME", "AMC", "RDDT", "DJT",
+    # === 热门中概 ===
     "BABA", "PDD", "JD", "BIDU", "BILI", "FUTU"
 }
 
-SP500_MIN_REVENUE = 5_000_000_000 
+# 备用名单 (防止 GitHub 挂了导致标普500加载失败)
 FALLBACK_GIANTS = {"NVDA", "AAPL", "MSFT", "AMZN", "TSLA", "GOOG", "META"}
 
-# Settings
+# 宏观关键词 (用于判断是否重要讲话)
 SPEECH_KEYWORDS = ["Speech", "Testimony", "Remarks", "Press Conference", "Hearing"]
 WEEKDAY_MAP = {
     'Monday': '周一', 'Tuesday': '周二', 'Wednesday': '周三', 'Thursday': '周四',
@@ -58,11 +72,12 @@ WEEKDAY_MAP = {
 }
 IMPACT_MAP = {"Low": 1, "Medium": 2, "High": 3}
 
+# 全局变量
 settings = {}
 sp500_symbols = set() 
 translate_client = None
 
-# ================== 辅助函数 ==================
+# ================== 4. 辅助工具函数 ==================
 def log(msg):
     print(msg, flush=True)
 
@@ -72,10 +87,9 @@ def safe_print_error(prefix, error_obj):
         err_str = err_str.replace(FMP_KEY, "******")
     log(f"❌ {prefix}: {err_str}")
 
-# ================== Google Translate ==================
+# 初始化 Google 翻译
 google_json_str = os.getenv('GOOGLE_JSON_CONTENT') 
 google_key_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
-
 try:
     if google_json_str:
         cred_info = json.loads(google_json_str)
@@ -89,7 +103,6 @@ try:
 except Exception as e:
     safe_print_error("SDK 初始化失败", e)
 
-# ================== 数据持久化 ==================
 def load_settings():
     global settings
     if os.path.exists(SETTINGS_FILE):
@@ -126,7 +139,7 @@ def translate_finance_text(text, target_lang='zh'):
         return t.strip()
     except: return text
 
-# ================== 更新 S&P 500 ==================
+# ================== 5. 核心逻辑：更新白名单 ==================
 async def update_sp500_list():
     global sp500_symbols
     log("🔄 正在从 GitHub 更新 S&P 500 名单...")
@@ -136,14 +149,18 @@ async def update_sp500_list():
                 if resp.status == 200:
                     text = await resp.text()
                     new_list = set()
+                    # 跳过第一行表头
                     for line in text.split('\n')[1:]:
                         parts = line.split(',')
                         if parts and parts[0]:
+                            # Yahoo/FMP 格式兼容: BRK.B -> BRK-B
                             new_list.add(parts[0].strip().replace('.', '-'))
+                    
                     if len(new_list) > 400:
                         sp500_symbols = new_list
                         log(f"✅ S&P 500 更新成功: {len(sp500_symbols)} 只")
                     else:
+                        log("⚠️ GitHub 数据异常，使用备用名单")
                         sp500_symbols.update(FALLBACK_GIANTS)
                 else:
                     log(f"⚠️ GitHub 访问失败: {resp.status}")
@@ -152,31 +169,37 @@ async def update_sp500_list():
             safe_print_error("更新名单失败", e)
             sp500_symbols.update(FALLBACK_GIANTS)
 
-# ================== 经济日历 ==================
+# ================== 6. 核心逻辑：宏观日历 (FMP) ==================
 async def fetch_us_events(target_date_str, min_importance=2):
     try: target_date = datetime.datetime.strptime(target_date_str, "%Y-%m-%d").date()
     except: return []
+    
     params = {"from": target_date_str, "to": target_date_str, "apikey": FMP_KEY}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(FMP_CAL_URL, params=params, timeout=10) as resp:
                 resp.raise_for_status()
                 data = await resp.json()
+        
         events = []
         start = BJT.localize(datetime.datetime.combine(target_date, datetime.time(8, 0)))
         end = start + datetime.timedelta(days=1)
+        
         for item in data:
             if item.get("country") != "US": continue
             imp = IMPACT_MAP.get(item.get("impact", "Low").capitalize(), 1)
             if imp < min_importance: continue
+            
             dt_str = item.get("date")
             if not dt_str: continue
             utc = UTC.localize(datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S"))
             bjt = utc.astimezone(BJT)
             if not (start <= bjt < end): continue
+
             et = utc.astimezone(ET)
             time_str = f"{bjt.strftime('%H:%M')} ({et.strftime('%H:%M')} ET)"
             title = clean_title(item.get("event", ""))
+            
             events.append({
                 "time": time_str,
                 "importance": "★" * imp,
@@ -186,6 +209,8 @@ async def fetch_us_events(target_date_str, min_importance=2):
                 "orig_title": title,
                 "bjt_timestamp": bjt
             })
+        
+        # 去重
         unique_events = {}
         for e in events:
             key = e['title']
@@ -196,68 +221,99 @@ async def fetch_us_events(target_date_str, min_importance=2):
         safe_print_error("Events API Error", e)
         return []
 
-# ================== 财报获取 ==================
+# ================== 7. 核心逻辑：财报获取 (Yahoo 爬虫版) ==================
 async def fetch_earnings(date_str):
     if not sp500_symbols: await update_sp500_list()
     
-    log(f"🔍 [调试] 查询 Stable 财报: {date_str}")
-    params = {"from": date_str, "to": date_str, "apikey": FMP_KEY}
+    log(f"🕷️ [爬虫] 伪装 Chrome 抓取 Yahoo: {date_str}")
     
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(FMP_EARNINGS_URL, params=params, timeout=10) as resp:
-                if resp.status == 403:
-                    log("❌ 403 Forbidden: Key 权限问题")
-                    return []
-                resp.raise_for_status()
-                data = await resp.json()
-            
-            if not data:
-                log("⚠️ 无财报数据")
-                return []
-
-            important_stocks = []
-            for item in data:
-                symbol = item.get('symbol')
-                if not symbol: continue
+    important_stocks = []
+    
+    # 伪装成 Chrome 110 (Windows) 绕过 Yahoo/Cloudflare
+    try:
+        async with AsyncSession(impersonate="chrome110") as session:
+            # 爬取前 200 条 (2页)
+            for offset in [0, 100]:
+                url = f"{YAHOO_CAL_URL}?day={date_str}&offset={offset}&size=100"
                 
-                rev_est = item.get('revenueEstimated') or 0
-                is_hot = symbol in HOT_STOCKS
-                is_giant = (symbol in sp500_symbols) and (rev_est > SP500_MIN_REVENUE)
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Referer": "https://finance.yahoo.com/",
+                    "Accept-Language": "en-US,en;q=0.9"
+                }
+
+                resp = await session.get(url, headers=headers, timeout=15)
                 
-                if is_hot or is_giant:
-                    # Stable 接口可能不返 time，默认 other
-                    raw_time = item.get('time', 'other')
-                    important_stocks.append({
-                        'symbol': symbol,
-                        'name': item.get('name', symbol),
-                        'revenue': rev_est,
-                        'time': raw_time, 
-                        'is_hot': is_hot
-                    })
+                if resp.status_code != 200:
+                    log(f"❌ Yahoo 返回状态码: {resp.status_code}")
+                    break
+                
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                rows = soup.find_all('tr')
+                
+                if not rows:
+                    log(f"⚠️ 页面解析为空 (Offset {offset})")
+                    continue
 
-            log(f"✅ 筛选后剩余 {len(important_stocks)} 家")
-            important_stocks.sort(key=lambda x: (x['is_hot'], x['revenue']), reverse=True)
-            return important_stocks
+                for row in rows:
+                    cols = row.find_all('td')
+                    # Yahoo 表格结构: Symbol | Company | Call Time | ...
+                    if len(cols) < 3: continue
+                    
+                    # 1. 获取代码
+                    sym_tag = cols[0].find('a')
+                    if not sym_tag: continue
+                    symbol = sym_tag.text.strip()
+                    
+                    # 2. 获取时间
+                    # 常见值: "Before Market Open", "After Market Close", "Time Not Supplied"
+                    time_text = cols[2].text.strip()
+                    
+                    # === 筛选逻辑 ===
+                    is_hot = symbol in HOT_STOCKS
+                    is_sp500 = symbol in sp500_symbols
+                    
+                    # 只要是 热门股 或 标普500成分股，就保留
+                    if is_hot or is_sp500:
+                        # 归一化时间代码
+                        time_code = 'other'
+                        if "Before" in time_text: time_code = 'bmo'
+                        elif "After" in time_text: time_code = 'amc'
+                        
+                        important_stocks.append({
+                            'symbol': symbol,
+                            'time': time_code,
+                            'is_hot': is_hot
+                        })
+                
+                await asyncio.sleep(1) # 礼貌爬虫
 
-        except Exception as e:
-            safe_print_error("Fetch Earnings Error", e)
-            return []
+        log(f"✅ 抓取完成，筛选后剩余 {len(important_stocks)} 家")
+        
+        # 去重 & 排序 (热门股优先)
+        unique_dict = {s['symbol']: s for s in important_stocks}
+        final_list = list(unique_dict.values())
+        final_list.sort(key=lambda x: x['is_hot'], reverse=True)
+        
+        return final_list
 
-# ================== 格式化 Embed (修改版) ==================
+    except Exception as e:
+        safe_print_error("Yahoo 爬虫严重错误", e)
+        return []
+
+# ================== 8. 格式化输出 (极简版) ==================
 def format_calendar_embed(events, date_str, min_imp):
-    # [修改] 标题格式优化：今日热点（11月22日/周五）
     try:
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
         month_day = dt.strftime("%m月%d日")
-        weekday = WEEKDAY_MAP.get(dt.strftime('%A'), '')
-        title = f"今日热点（{month_day}/{weekday}）"
+        weekday_cn = WEEKDAY_MAP.get(dt.strftime('%A'), '')
+        title = f"今日热点（{month_day}/{weekday_cn}）"
     except:
         title = f"今日热点 ({date_str})"
 
-    # [修改] 颜色改为绿色 0x00FF00
     if not events: return [discord.Embed(title=title, description="无重要事件", color=0x00FF00)]
     
+    # 绿色侧边栏 0x00FF00
     embed = discord.Embed(title=title, color=0x00FF00)
     for e in events:
         val = f"影响: {e['importance']}" if any(k in e['orig_title'] for k in SPEECH_KEYWORDS) else \
@@ -269,37 +325,33 @@ def format_earnings_embed(stocks, date_str):
     if not stocks: return None
     
     title = f"💰 重点财报 ({date_str})"
-    embed = discord.Embed(title=title, description="🔥=热门股 | 🏢=巨头", color=0xf1c40f)
+    # 移除描述图例，保持干净
+    embed = discord.Embed(title=title, color=0xf1c40f)
     
-    def build_content(items):
+    def build_list(items):
         lines = []
         for s in items:
-            icon = "🔥" if s['is_hot'] else "🏢"
-            rev_tag = ""
-            if s['revenue'] > 1_000_000_000:
-                rev_tag = f"| 营收${s['revenue']/1_000_000_000:.1f}B"
-            lines.append(f"{icon} **{s['symbol']}** {rev_tag}")
+            # 热门股显示 🔥，普通巨头显示 •
+            icon = "🔥" if s['is_hot'] else "•"
+            lines.append(f"{icon} **{s['symbol']}**")
         
-        final_text = "\n".join(lines)
-        if len(final_text) > 1000:
-            return "\n".join(lines[:15]) + f"\n...以及其他 {len(lines)-15} 家"
-        return final_text
+        text = "\n".join(lines)
+        # 防爆截断 (Discord 限制 1024 字符)
+        if len(text) > 1000: return "\n".join(lines[:20]) + f"\n... (+{len(lines)-20})"
+        return text
 
-    # 分类处理
-    bmo, amc, other = [], [], []
-    for s in stocks:
-        t_str = str(s.get('time', '')).lower()
-        if 'bmo' in t_str: bmo.append(s)
-        elif 'amc' in t_str: amc.append(s)
-        else: other.append(s)
+    # 分类
+    bmo = [s for s in stocks if s['time'] == 'bmo']
+    amc = [s for s in stocks if s['time'] == 'amc']
+    other = [s for s in stocks if s['time'] == 'other']
 
-    if bmo: embed.add_field(name="☀️ 盘前 (Before Open)", value=build_content(bmo), inline=False)
-    if amc: embed.add_field(name="🌙 盘后 (After Close)", value=build_content(amc), inline=False)
-    if other: embed.add_field(name="🕒 时间未定 / 其他", value=build_content(other), inline=False)
+    if bmo: embed.add_field(name="☀️ 盘前 (Before Open)", value=build_list(bmo), inline=False)
+    if amc: embed.add_field(name="🌙 盘后 (After Close)", value=build_list(amc), inline=False)
+    if other: embed.add_field(name="🕒 时间未定 / 其他", value=build_list(other), inline=False)
     
     return embed
 
-# ================== 定时任务 ==================
+# ================== 9. 定时任务与事件 ==================
 @tasks.loop(minutes=1)
 async def main_loop():
     now = datetime.datetime.now(BJT)
@@ -335,15 +387,15 @@ async def main_loop():
 async def before_loop():
     await bot.wait_until_ready()
 
-# ================== 启动 ==================
 @bot.event
 async def on_ready():
     load_settings()
     log(f'✅ Bot 已登录: {bot.user}')
     await bot.tree.sync()
-    await update_sp500_list()
+    await update_sp500_list() # 启动时更新白名单
     if not main_loop.is_running(): main_loop.start()
 
+# ================== 10. 命令 ==================
 @bot.tree.command(name="set_channel", description="设置推送频道")
 async def set_channel(interaction: discord.Interaction):
     gid = interaction.guild_id
@@ -367,6 +419,29 @@ async def test_push(interaction: discord.Interaction):
     today = datetime.datetime.now(BJT).strftime("%Y-%m-%d")
     evts = await fetch_us_events(today, 2)
     for em in format_calendar_embed(evts, today, 2): await interaction.followup.send(embed=em)
+
+@bot.tree.command(name="set_importance", description="设置宏观事件最低星级")
+@discord.app_commands.choices(level=[
+    discord.app_commands.Choice(name="★ (全部)", value=1),
+    discord.app_commands.Choice(name="★★ (中高)", value=2),
+    discord.app_commands.Choice(name="★★★ (高)", value=3),
+])
+async def set_importance(interaction: discord.Interaction, level: discord.app_commands.Choice[int]):
+    gid = interaction.guild_id
+    if gid not in settings: settings[gid] = {}
+    settings[gid]['min_importance'] = level.value
+    save_settings()
+    await interaction.response.send_message(f"✅ 最低星级设为 {level.name}", ephemeral=True)
+
+@bot.tree.command(name="disable_push", description="关闭本服务器推送")
+async def disable_push(interaction: discord.Interaction):
+    gid = interaction.guild_id
+    if gid in settings:
+        del settings[gid]
+        save_settings()
+        await interaction.response.send_message("🚫 已关闭本服务器推送", ephemeral=True)
+    else:
+        await interaction.response.send_message("本服务器未开启推送", ephemeral=True)
 
 if __name__ == "__main__":
     bot.run(TOKEN)
