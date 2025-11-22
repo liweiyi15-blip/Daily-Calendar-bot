@@ -31,15 +31,11 @@ BJT = pytz.timezone('Asia/Shanghai')
 UTC = pytz.UTC
 
 # ================== 2. 数据源 URL ==================
-# 宏观日历 (使用 FMP Stable 接口)
 FMP_CAL_URL = "https://financialmodelingprep.com/stable/economic-calendar"
-# 财报日历 (使用 Yahoo 网页爬虫，获取精准盘前盘后)
 YAHOO_CAL_URL = "https://finance.yahoo.com/calendar/earnings"
-# S&P 500 成分股名单 (用于过滤非热门的杂鱼股)
 GITHUB_SP500_URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
 
 # ================== 3. 核心关注名单 (带🔥) ==================
-# 这些股票无论是不是标普500，只要发财报就强制推送，并打上火焰标记
 HOT_STOCKS = {
     # === 用户特别关注 ===
     "RKLB", "COIN", "NVDA", "TSLA", "HOOD", "PLTR",
@@ -61,10 +57,8 @@ HOT_STOCKS = {
     "BABA", "PDD", "JD", "BIDU", "BILI", "FUTU"
 }
 
-# 备用名单 (防止 GitHub 挂了导致标普500加载失败)
 FALLBACK_GIANTS = {"NVDA", "AAPL", "MSFT", "AMZN", "TSLA", "GOOG", "META"}
 
-# 宏观关键词 (用于判断是否重要讲话)
 SPEECH_KEYWORDS = ["Speech", "Testimony", "Remarks", "Press Conference", "Hearing"]
 WEEKDAY_MAP = {
     'Monday': '周一', 'Tuesday': '周二', 'Wednesday': '周三', 'Thursday': '周四',
@@ -149,11 +143,9 @@ async def update_sp500_list():
                 if resp.status == 200:
                     text = await resp.text()
                     new_list = set()
-                    # 跳过第一行表头
                     for line in text.split('\n')[1:]:
                         parts = line.split(',')
                         if parts and parts[0]:
-                            # Yahoo/FMP 格式兼容: BRK.B -> BRK-B
                             new_list.add(parts[0].strip().replace('.', '-'))
                     
                     if len(new_list) > 400:
@@ -210,7 +202,6 @@ async def fetch_us_events(target_date_str, min_importance=2):
                 "bjt_timestamp": bjt
             })
         
-        # 去重
         unique_events = {}
         for e in events:
             key = e['title']
@@ -229,13 +220,10 @@ async def fetch_earnings(date_str):
     
     important_stocks = []
     
-    # 伪装成 Chrome 110 (Windows) 绕过 Yahoo/Cloudflare
     try:
         async with AsyncSession(impersonate="chrome110") as session:
-            # 爬取前 200 条 (2页)
             for offset in [0, 100]:
                 url = f"{YAHOO_CAL_URL}?day={date_str}&offset={offset}&size=100"
-                
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "Referer": "https://finance.yahoo.com/",
@@ -257,28 +245,22 @@ async def fetch_earnings(date_str):
 
                 for row in rows:
                     cols = row.find_all('td')
-                    # Yahoo 表格结构: Symbol | Company | Call Time | ...
                     if len(cols) < 3: continue
                     
-                    # 1. 获取代码
                     sym_tag = cols[0].find('a')
                     if not sym_tag: continue
                     symbol = sym_tag.text.strip()
-                    
-                    # 2. 获取时间
-                    # 常见值: "Before Market Open", "After Market Close", "Time Not Supplied"
                     time_text = cols[2].text.strip()
                     
-                    # === 筛选逻辑 ===
                     is_hot = symbol in HOT_STOCKS
                     is_sp500 = symbol in sp500_symbols
                     
-                    # 只要是 热门股 或 标普500成分股，就保留
                     if is_hot or is_sp500:
-                        # 归一化时间代码
                         time_code = 'other'
-                        if "Before" in time_text: time_code = 'bmo'
-                        elif "After" in time_text: time_code = 'amc'
+                        # 优化时间判断：不区分大小写
+                        t_lower = time_text.lower()
+                        if "before" in t_lower or "open" in t_lower: time_code = 'bmo'
+                        elif "after" in t_lower or "close" in t_lower: time_code = 'amc'
                         
                         important_stocks.append({
                             'symbol': symbol,
@@ -286,11 +268,10 @@ async def fetch_earnings(date_str):
                             'is_hot': is_hot
                         })
                 
-                await asyncio.sleep(1) # 礼貌爬虫
+                await asyncio.sleep(1)
 
         log(f"✅ 抓取完成，筛选后剩余 {len(important_stocks)} 家")
         
-        # 去重 & 排序 (热门股优先)
         unique_dict = {s['symbol']: s for s in important_stocks}
         final_list = list(unique_dict.values())
         final_list.sort(key=lambda x: x['is_hot'], reverse=True)
@@ -301,19 +282,18 @@ async def fetch_earnings(date_str):
         safe_print_error("Yahoo 爬虫严重错误", e)
         return []
 
-# ================== 8. 格式化输出 (极简版) ==================
+# ================== 8. 格式化输出 (极简两列版) ==================
 def format_calendar_embed(events, date_str, min_imp):
     try:
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
         month_day = dt.strftime("%m月%d日")
         weekday_cn = WEEKDAY_MAP.get(dt.strftime('%A'), '')
-        title = f"今日热点（{month_day}/{weekday_cn}）"
+        title = f"今日热点（{month_day} {weekday_cn}）"
     except:
         title = f"今日热点 ({date_str})"
 
     if not events: return [discord.Embed(title=title, description="无重要事件", color=0x00FF00)]
     
-    # 绿色侧边栏 0x00FF00
     embed = discord.Embed(title=title, color=0x00FF00)
     for e in events:
         val = f"影响: {e['importance']}" if any(k in e['orig_title'] for k in SPEECH_KEYWORDS) else \
@@ -324,31 +304,50 @@ def format_calendar_embed(events, date_str, min_imp):
 def format_earnings_embed(stocks, date_str):
     if not stocks: return None
     
-    title = f"💰 重点财报 ({date_str})"
-    # 移除描述图例，保持干净
+    # 1. 优化日期显示
+    try:
+        dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+        weekday_cn = WEEKDAY_MAP.get(dt.strftime('%A'), '')
+        title = f"💰 重点财报 | {date_str} ({weekday_cn})"
+    except:
+        title = f"💰 重点财报 ({date_str})"
+
     embed = discord.Embed(title=title, color=0xf1c40f)
     
-    def build_list(items):
-        lines = []
+    # 2. 构建紧凑列表 (带超链接)
+    def build_compact_list(items):
+        line_list = []
         for s in items:
-            # 热门股显示 🔥，普通巨头显示 •
-            icon = "🔥" if s['is_hot'] else "•"
-            lines.append(f"{icon} **{s['symbol']}**")
-        
-        text = "\n".join(lines)
-        # 防爆截断 (Discord 限制 1024 字符)
-        if len(text) > 1000: return "\n".join(lines[:20]) + f"\n... (+{len(lines)-20})"
-        return text
+            icon = "🔥" if s['is_hot'] else ""
+            # 给代码加上 Yahoo 链接
+            symbol_text = f"[`{s['symbol']}`](https://finance.yahoo.com/quote/{s['symbol']})"
+            line_list.append(f"{icon}{symbol_text}")
+        return " , ".join(line_list)
 
-    # 分类
     bmo = [s for s in stocks if s['time'] == 'bmo']
     amc = [s for s in stocks if s['time'] == 'amc']
     other = [s for s in stocks if s['time'] == 'other']
 
-    if bmo: embed.add_field(name="☀️ 盘前 (Before Open)", value=build_list(bmo), inline=False)
-    if amc: embed.add_field(name="🌙 盘后 (After Close)", value=build_list(amc), inline=False)
-    if other: embed.add_field(name="🕒 时间未定 / 其他", value=build_list(other), inline=False)
+    # 3. 左右两列布局 (inline=True)
+    # 盘前 (左)
+    if bmo: 
+        val = build_compact_list(bmo)
+        if len(val) > 1024: val = val[:1020] + "..."
+        embed.add_field(name="☀️ 盘前", value=val, inline=True)
     
+    # 盘后 (右)
+    if amc: 
+        val = build_compact_list(amc)
+        if len(val) > 1024: val = val[:1020] + "..."
+        embed.add_field(name="🌙 盘后", value=val, inline=True)
+    
+    # 其他/未定 (横跨下方)
+    if other:
+        val = build_compact_list(other)
+        if len(val) > 1024: val = val[:1020] + "..."
+        embed.add_field(name="🕒 时间未定", value=val, inline=False)
+
+    embed.set_footer(text="数据来源: Yahoo Finance")
     return embed
 
 # ================== 9. 定时任务与事件 ==================
@@ -392,7 +391,7 @@ async def on_ready():
     load_settings()
     log(f'✅ Bot 已登录: {bot.user}')
     await bot.tree.sync()
-    await update_sp500_list() # 启动时更新白名单
+    await update_sp500_list()
     if not main_loop.is_running(): main_loop.start()
 
 # ================== 10. 命令 ==================
