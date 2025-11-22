@@ -13,47 +13,36 @@ from google.cloud import translate_v2 as translate
 from google.oauth2 import service_account
 
 # ================== 1. 系统配置 ==================
-# 强制日志实时输出
 sys.stdout.reconfigure(line_buffering=True)
 
 TOKEN = os.getenv('TOKEN')
-FMP_KEY = os.getenv('FMP_KEY') # 仅用于宏观日历
+FMP_KEY = os.getenv('FMP_KEY') 
 SETTINGS_FILE = '/data/settings.json' 
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# 时区设置
+# 时区
 ET = pytz.timezone('America/New_York')
 BJT = pytz.timezone('Asia/Shanghai')
 UTC = pytz.UTC
 
 # ================== 2. 数据源 URL ==================
 FMP_CAL_URL = "https://financialmodelingprep.com/stable/economic-calendar"
-# 使用 Nasdaq 官方 API 替代 Yahoo
 NASDAQ_CAL_URL = "https://api.nasdaq.com/api/calendar/earnings"
 GITHUB_SP500_URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
 
 # ================== 3. 核心关注名单 (带🔥) ==================
 HOT_STOCKS = {
-    # === 用户特别关注 ===
     "RKLB", "COIN", "NVDA", "TSLA", "HOOD", "PLTR",
-    # === 芯片/半导体 ===
     "AMD", "INTC", "TSM", "ASML", "ARM", "AVGO", "QCOM", "MU", "SMCI", "MRVL",
-    # === 科技巨头 ===
     "AAPL", "MSFT", "AMZN", "GOOG", "GOOGL", "META", "NFLX", "CRM", "ADBE", "ORCL",
-    # === 热门成长/SaaS ===
     "U", "DKNG", "ROKU", "SHOP", "SQ", "ZM", "CRWD", "NET", "SNOW", "DDOG", "TEAM", "ZS", "PANW",
-    # === 加密货币 ===
     "MSTR", "MARA", "RIOT", "CLSK",
-    # === 太空/新能源/硬科技 ===
     "ASTS", "SPCE", "IONQ", "RIVN", "LCID", "NIO", "XPEV", "LI", "ENPH", "CVNA",
-    # === 金融科技 ===
     "SOFI", "UPST", "AFRM", "PYPL",
-    # === WSB/网红 ===
     "GME", "AMC", "RDDT", "DJT",
-    # === 热门中概 ===
     "BABA", "PDD", "JD", "BIDU", "BILI", "FUTU"
 }
 
@@ -212,13 +201,12 @@ async def fetch_us_events(target_date_str, min_importance=2):
         safe_print_error("Events API Error", e)
         return []
 
-# ================== 7. 核心逻辑：财报获取 (Nasdaq 官方 API 版) ==================
+# ================== 7. 核心逻辑：财报获取 (增强日志 + 强力兜底版) ==================
 async def fetch_earnings(date_str):
     if not sp500_symbols: await update_sp500_list()
     
     log(f"🚀 [Nasdaq] 正在获取财报数据: {date_str}")
     
-    # Nasdaq 对 Headers 校验极其严格
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -231,7 +219,6 @@ async def fetch_earnings(date_str):
 
     try:
         async with AsyncSession(impersonate="chrome110") as session:
-            # 调用 Nasdaq 隐藏接口
             resp = await session.get(NASDAQ_CAL_URL, params=params, headers=headers, timeout=15)
             
             if resp.status_code != 200:
@@ -241,23 +228,32 @@ async def fetch_earnings(date_str):
             try:
                 data = resp.json()
             except:
-                log("❌ Nasdaq 返回内容无法解析为 JSON")
+                log("❌ Nasdaq 返回非 JSON 数据")
                 return []
 
             rows = data.get('data', {}).get('rows', [])
             if not rows:
-                log("⚠️ Nasdaq 返回空数据 (当日无财报或休市)")
+                log("⚠️ Nasdaq 返回空数据")
                 return []
 
             important_stocks = []
             
+            # === 强力兜底字典 (如果官网没时间，就用这个) ===
+            # 1 = 盘前 (BMO), 2 = 盘后 (AMC)
+            FALLBACK_MAP = {
+                # 中概股 / 零售 / 传统行业 -> 通常盘前
+                "BABA": 1, "JD": 1, "BIDU": 1, "PDD": 1, "NIO": 1, "LI": 1, "XPEV": 1,
+                "BILI": 1, "FUTU": 1, "ADI": 1, "BBY": 1, "SJM": 1, "LOW": 1, "TGT": 1,
+                # 科技巨头 -> 通常盘后
+                "NVDA": 2, "AMD": 2, "INTC": 2, "AAPL": 2, "MSFT": 2, "GOOG": 2, 
+                "AMZN": 2, "META": 2, "TSLA": 2, "NFLX": 2, "COIN": 2, "HOOD": 2,
+                "DELL": 2, "MRVL": 2, "ZS": 2, "CRWD": 2, "PANW": 2
+            }
+
             for item in rows:
-                # 清洗代码 (去除 ^ 等符号)
                 raw_symbol = item.get('symbol')
                 symbol = re.sub(r'[^A-Z]', '', str(raw_symbol).upper())
-                
-                # 时间字符串: "After Market Close", "Before Market Open", "Time Not Supplied"
-                time_str = item.get('time', 'other')
+                time_str = item.get('time', 'other') # 原始字符串
                 
                 is_hot = symbol in HOT_STOCKS
                 is_sp500 = symbol in sp500_symbols
@@ -265,28 +261,33 @@ async def fetch_earnings(date_str):
                 if is_hot or is_sp500:
                     time_code = 'other'
                     t_lower = time_str.lower()
+                    source_note = "Nasdaq原数据" # 日志备注
                     
-                    if "before" in t_lower: 
+                    # 1. 优先信赖官网明确的时间
+                    if "before" in t_lower or "open" in t_lower: 
                         time_code = 'bmo'
-                    elif "after" in t_lower: 
+                    elif "after" in t_lower or "close" in t_lower: 
                         time_code = 'amc'
                     
-                    # === 智能修正：如果交易所显示“时间未定”，则按历史惯例修正 ===
-                    if time_code == 'other' and ("supplied" in t_lower or "tba" in t_lower):
-                        # 中概股 -> 盘前
-                        if symbol in ["BABA", "JD", "BIDU", "PDD", "NIO", "LI", "XPEV", "BILI", "FUTU"]:
-                            time_code = 'bmo'
-                        # 美国科技巨头 -> 盘后
-                        elif symbol in ["NVDA", "AMD", "INTC", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "NFLX", "COIN", "HOOD"]:
-                            time_code = 'amc'
-                    
+                    # 2. 如果官网说 "Unspecified" 或 "Supplied"，启用强力兜底
+                    if time_code == 'other':
+                        if symbol in FALLBACK_MAP:
+                            guess = FALLBACK_MAP[symbol]
+                            time_code = 'bmo' if guess == 1 else 'amc'
+                            source_note = "⚠️历史惯例兜底"
+                        else:
+                            source_note = "❓官网未定且无兜底"
+
+                    # 打印详细日志
+                    if is_hot or "兜底" in source_note:
+                        log(f"🔍 {symbol}: 原文='{time_str}' -> 判定={time_code} [{source_note}]")
+
                     important_stocks.append({
                         'symbol': symbol,
                         'time': time_code,
                         'is_hot': is_hot
                     })
             
-            # 去重 & 排序
             unique_dict = {s['symbol']: s for s in important_stocks}
             final_list = list(unique_dict.values())
             final_list.sort(key=lambda x: x['is_hot'], reverse=True)
@@ -298,7 +299,7 @@ async def fetch_earnings(date_str):
         safe_print_error("Nasdaq API Error", e)
         return []
 
-# ================== 8. 格式化输出 (极简两列版) ==================
+# ================== 8. 格式化输出 (无链接纯净版) ==================
 def format_calendar_embed(events, date_str, min_imp):
     try:
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
@@ -320,7 +321,7 @@ def format_calendar_embed(events, date_str, min_imp):
 def format_earnings_embed(stocks, date_str):
     if not stocks: return None
     
-    # 1. 优化日期显示 (带星期)
+    # 1. 优化日期显示
     try:
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
         weekday_cn = WEEKDAY_MAP.get(dt.strftime('%A'), '')
@@ -330,13 +331,13 @@ def format_earnings_embed(stocks, date_str):
 
     embed = discord.Embed(title=title, color=0xf1c40f)
     
-    # 2. 构建紧凑列表 (带超链接)
+    # 2. 构建列表 (无链接，纯文本)
     def build_compact_list(items):
         line_list = []
         for s in items:
             icon = "🔥" if s['is_hot'] else ""
-            # 给代码加上 Yahoo 链接，方便用户点击查看
-            symbol_text = f"[`{s['symbol']}`](https://finance.yahoo.com/quote/{s['symbol']})"
+            # 去掉链接，只保留粗体
+            symbol_text = f"**{s['symbol']}**"
             line_list.append(f"{icon}{symbol_text}")
         return " , ".join(line_list)
 
@@ -344,26 +345,23 @@ def format_earnings_embed(stocks, date_str):
     amc = [s for s in stocks if s['time'] == 'amc']
     other = [s for s in stocks if s['time'] == 'other']
 
-    # 3. 左右两列布局
-    # 盘前 (左)
+    # 3. 布局
     if bmo: 
         val = build_compact_list(bmo)
         if len(val) > 1024: val = val[:1020] + "..."
         embed.add_field(name="☀️ 盘前 (Before Open)", value=val, inline=True)
     
-    # 盘后 (右)
     if amc: 
         val = build_compact_list(amc)
         if len(val) > 1024: val = val[:1020] + "..."
         embed.add_field(name="🌙 盘后 (After Close)", value=val, inline=True)
     
-    # 其他 (下方)
     if other:
         val = build_compact_list(other)
         if len(val) > 1024: val = val[:1020] + "..."
         embed.add_field(name="🕒 时间未定", value=val, inline=False)
 
-    embed.set_footer(text="数据来源: Nasdaq • 点击代码查看详情")
+    embed.set_footer(text="数据来源: Nasdaq")
     return embed
 
 # ================== 9. 定时任务与事件 ==================
