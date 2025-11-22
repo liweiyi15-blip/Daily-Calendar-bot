@@ -8,13 +8,12 @@ import os
 import re
 import asyncio
 import sys
-from bs4 import BeautifulSoup
-from curl_cffi.requests import AsyncSession # 核心：伪装浏览器绕过 Yahoo 反爬
+from curl_cffi.requests import AsyncSession # 核心：伪装浏览器
 from google.cloud import translate_v2 as translate
 from google.oauth2 import service_account
 
 # ================== 1. 系统配置 ==================
-# 强制日志实时输出，防止 Railway 卡顿
+# 强制日志实时输出
 sys.stdout.reconfigure(line_buffering=True)
 
 TOKEN = os.getenv('TOKEN')
@@ -32,7 +31,8 @@ UTC = pytz.UTC
 
 # ================== 2. 数据源 URL ==================
 FMP_CAL_URL = "https://financialmodelingprep.com/stable/economic-calendar"
-YAHOO_CAL_URL = "https://finance.yahoo.com/calendar/earnings"
+# 使用 Nasdaq 官方 API 替代 Yahoo
+NASDAQ_CAL_URL = "https://api.nasdaq.com/api/calendar/earnings"
 GITHUB_SP500_URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
 
 # ================== 3. 核心关注名单 (带🔥) ==================
@@ -212,74 +212,90 @@ async def fetch_us_events(target_date_str, min_importance=2):
         safe_print_error("Events API Error", e)
         return []
 
-# ================== 7. 核心逻辑：财报获取 (Yahoo 爬虫版) ==================
+# ================== 7. 核心逻辑：财报获取 (Nasdaq 官方 API 版) ==================
 async def fetch_earnings(date_str):
     if not sp500_symbols: await update_sp500_list()
     
-    log(f"🕷️ [爬虫] 伪装 Chrome 抓取 Yahoo: {date_str}")
+    log(f"🚀 [Nasdaq] 正在获取财报数据: {date_str}")
     
-    important_stocks = []
+    # Nasdaq 对 Headers 校验极其严格
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://www.nasdaq.com",
+        "Referer": "https://www.nasdaq.com/",
+        "Accept": "application/json, text/plain, */*"
+    }
     
+    params = {"date": date_str}
+
     try:
         async with AsyncSession(impersonate="chrome110") as session:
-            for offset in [0, 100]:
-                url = f"{YAHOO_CAL_URL}?day={date_str}&offset={offset}&size=100"
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Referer": "https://finance.yahoo.com/",
-                    "Accept-Language": "en-US,en;q=0.9"
-                }
+            # 调用 Nasdaq 隐藏接口
+            resp = await session.get(NASDAQ_CAL_URL, params=params, headers=headers, timeout=15)
+            
+            if resp.status_code != 200:
+                log(f"❌ Nasdaq API 返回错误: {resp.status_code}")
+                return []
+            
+            try:
+                data = resp.json()
+            except:
+                log("❌ Nasdaq 返回内容无法解析为 JSON")
+                return []
 
-                resp = await session.get(url, headers=headers, timeout=15)
-                
-                if resp.status_code != 200:
-                    log(f"❌ Yahoo 返回状态码: {resp.status_code}")
-                    break
-                
-                soup = BeautifulSoup(resp.text, 'html.parser')
-                rows = soup.find_all('tr')
-                
-                if not rows:
-                    log(f"⚠️ 页面解析为空 (Offset {offset})")
-                    continue
+            rows = data.get('data', {}).get('rows', [])
+            if not rows:
+                log("⚠️ Nasdaq 返回空数据 (当日无财报或休市)")
+                return []
 
-                for row in rows:
-                    cols = row.find_all('td')
-                    if len(cols) < 3: continue
-                    
-                    sym_tag = cols[0].find('a')
-                    if not sym_tag: continue
-                    symbol = sym_tag.text.strip()
-                    time_text = cols[2].text.strip()
-                    
-                    is_hot = symbol in HOT_STOCKS
-                    is_sp500 = symbol in sp500_symbols
-                    
-                    if is_hot or is_sp500:
-                        time_code = 'other'
-                        # 优化时间判断：不区分大小写
-                        t_lower = time_text.lower()
-                        if "before" in t_lower or "open" in t_lower: time_code = 'bmo'
-                        elif "after" in t_lower or "close" in t_lower: time_code = 'amc'
-                        
-                        important_stocks.append({
-                            'symbol': symbol,
-                            'time': time_code,
-                            'is_hot': is_hot
-                        })
+            important_stocks = []
+            
+            for item in rows:
+                # 清洗代码 (去除 ^ 等符号)
+                raw_symbol = item.get('symbol')
+                symbol = re.sub(r'[^A-Z]', '', str(raw_symbol).upper())
                 
-                await asyncio.sleep(1)
-
-        log(f"✅ 抓取完成，筛选后剩余 {len(important_stocks)} 家")
-        
-        unique_dict = {s['symbol']: s for s in important_stocks}
-        final_list = list(unique_dict.values())
-        final_list.sort(key=lambda x: x['is_hot'], reverse=True)
-        
-        return final_list
+                # 时间字符串: "After Market Close", "Before Market Open", "Time Not Supplied"
+                time_str = item.get('time', 'other')
+                
+                is_hot = symbol in HOT_STOCKS
+                is_sp500 = symbol in sp500_symbols
+                
+                if is_hot or is_sp500:
+                    time_code = 'other'
+                    t_lower = time_str.lower()
+                    
+                    if "before" in t_lower: 
+                        time_code = 'bmo'
+                    elif "after" in t_lower: 
+                        time_code = 'amc'
+                    
+                    # === 智能修正：如果交易所显示“时间未定”，则按历史惯例修正 ===
+                    if time_code == 'other' and ("supplied" in t_lower or "tba" in t_lower):
+                        # 中概股 -> 盘前
+                        if symbol in ["BABA", "JD", "BIDU", "PDD", "NIO", "LI", "XPEV", "BILI", "FUTU"]:
+                            time_code = 'bmo'
+                        # 美国科技巨头 -> 盘后
+                        elif symbol in ["NVDA", "AMD", "INTC", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "NFLX", "COIN", "HOOD"]:
+                            time_code = 'amc'
+                    
+                    important_stocks.append({
+                        'symbol': symbol,
+                        'time': time_code,
+                        'is_hot': is_hot
+                    })
+            
+            # 去重 & 排序
+            unique_dict = {s['symbol']: s for s in important_stocks}
+            final_list = list(unique_dict.values())
+            final_list.sort(key=lambda x: x['is_hot'], reverse=True)
+            
+            log(f"✅ Nasdaq 获取完成，筛选后剩余 {len(final_list)} 家")
+            return final_list
 
     except Exception as e:
-        safe_print_error("Yahoo 爬虫严重错误", e)
+        safe_print_error("Nasdaq API Error", e)
         return []
 
 # ================== 8. 格式化输出 (极简两列版) ==================
@@ -304,7 +320,7 @@ def format_calendar_embed(events, date_str, min_imp):
 def format_earnings_embed(stocks, date_str):
     if not stocks: return None
     
-    # 1. 优化日期显示
+    # 1. 优化日期显示 (带星期)
     try:
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
         weekday_cn = WEEKDAY_MAP.get(dt.strftime('%A'), '')
@@ -319,7 +335,7 @@ def format_earnings_embed(stocks, date_str):
         line_list = []
         for s in items:
             icon = "🔥" if s['is_hot'] else ""
-            # 给代码加上 Yahoo 链接
+            # 给代码加上 Yahoo 链接，方便用户点击查看
             symbol_text = f"[`{s['symbol']}`](https://finance.yahoo.com/quote/{s['symbol']})"
             line_list.append(f"{icon}{symbol_text}")
         return " , ".join(line_list)
@@ -328,26 +344,26 @@ def format_earnings_embed(stocks, date_str):
     amc = [s for s in stocks if s['time'] == 'amc']
     other = [s for s in stocks if s['time'] == 'other']
 
-    # 3. 左右两列布局 (inline=True)
+    # 3. 左右两列布局
     # 盘前 (左)
     if bmo: 
         val = build_compact_list(bmo)
         if len(val) > 1024: val = val[:1020] + "..."
-        embed.add_field(name="☀️ 盘前", value=val, inline=True)
+        embed.add_field(name="☀️ 盘前 (Before Open)", value=val, inline=True)
     
     # 盘后 (右)
     if amc: 
         val = build_compact_list(amc)
         if len(val) > 1024: val = val[:1020] + "..."
-        embed.add_field(name="🌙 盘后", value=val, inline=True)
+        embed.add_field(name="🌙 盘后 (After Close)", value=val, inline=True)
     
-    # 其他/未定 (横跨下方)
+    # 其他 (下方)
     if other:
         val = build_compact_list(other)
         if len(val) > 1024: val = val[:1020] + "..."
         embed.add_field(name="🕒 时间未定", value=val, inline=False)
 
-    embed.set_footer(text="数据来源: Yahoo Finance")
+    embed.set_footer(text="数据来源: Nasdaq • 点击代码查看详情")
     return embed
 
 # ================== 9. 定时任务与事件 ==================
