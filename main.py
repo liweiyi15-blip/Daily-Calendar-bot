@@ -8,7 +8,7 @@ import os
 import re
 import asyncio
 import sys
-from curl_cffi.requests import AsyncSession # 核心：伪装浏览器
+from curl_cffi.requests import AsyncSession 
 from google.cloud import translate_v2 as translate
 from google.oauth2 import service_account
 
@@ -201,7 +201,7 @@ async def fetch_us_events(target_date_str, min_importance=2):
         safe_print_error("Events API Error", e)
         return []
 
-# ================== 7. 核心逻辑：财报获取 ==================
+# ================== 7. 核心逻辑：财报获取 (含强力兜底) ==================
 async def fetch_earnings(date_str):
     if not sp500_symbols: await update_sp500_list()
     
@@ -257,7 +257,6 @@ async def fetch_earnings(date_str):
                 if is_hot or is_sp500:
                     time_code = 'other'
                     t_lower = time_str.lower()
-                    source_note = "Nasdaq原数据"
                     
                     if "before" in t_lower or "open" in t_lower: 
                         time_code = 'bmo'
@@ -268,12 +267,8 @@ async def fetch_earnings(date_str):
                         if symbol in FALLBACK_MAP:
                             guess = FALLBACK_MAP[symbol]
                             time_code = 'bmo' if guess == 1 else 'amc'
-                            source_note = "⚠️历史惯例兜底"
                         else:
-                            source_note = "❓官网未定且无兜底"
-
-                    if is_hot or "兜底" in source_note:
-                        log(f"🔍 {symbol}: 原文='{time_str}' -> 判定={time_code} [{source_note}]")
+                            pass
 
                     important_stocks.append({
                         'symbol': symbol,
@@ -292,85 +287,71 @@ async def fetch_earnings(date_str):
         safe_print_error("Nasdaq API Error", e)
         return []
 
-# ================== 8. 格式化输出 (视觉优美版) ==================
+# ================== 8. 格式化输出 (定制优化版) ==================
 def format_calendar_embed(events, date_str, min_imp):
     try:
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
         month_day = dt.strftime("%m月%d日")
         weekday_cn = WEEKDAY_MAP.get(dt.strftime('%A'), '')
-        title = f"📅 今日宏观 | {month_day} {weekday_cn}"
+        title = f"今日热点 ({month_day}/{weekday_cn})"
     except:
-        title = f"📅 今日宏观 ({date_str})"
+        title = f"今日热点 ({date_str})"
 
-    if not events: return [discord.Embed(title=title, description="💤 今日无重要事件", color=0x00FF00)]
+    if not events: return [discord.Embed(title=title, description="无重要事件", color=0x00FF00)]
     
-    embed = discord.Embed(title=title, color=0x2ecc71) # 宏观用绿色
-    embed.set_thumbnail(url="https://img.icons8.com/color/96/calendar--v1.png") # 增加图标
-
+    embed = discord.Embed(title=title, color=0x00FF00)
     for e in events:
-        # 优化标题显示
-        flag = "🇺🇸 "
-        # 优化内容排版
-        if any(k in e['orig_title'] for k in SPEECH_KEYWORDS):
-            val = f"🗣️ **重要讲话** (影响: {e['importance']})"
-        else:
-            val = f"📊 预期: `{e['forecast']}` | 前值: `{e['previous']}` | 影响: {e['importance']}"
-        
-        embed.add_field(name=f"{flag} {e['time']}  {e['title']}", value=val, inline=False)
-    
+        val = f"影响: {e['importance']}" if any(k in e['orig_title'] for k in SPEECH_KEYWORDS) else \
+              f"影响: {e['importance']} | 预期: {e['forecast']} | 前值: {e['previous']}"
+        embed.add_field(name=f"{e['time']} {e['title']}", value=val, inline=False)
     return [embed]
 
 def format_earnings_embed(stocks, date_str):
     if not stocks: return None
     
+    # 1. 格式化日期：(11月25日/周二)
     try:
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+        month_day = dt.strftime("%m月%d日")
         weekday_cn = WEEKDAY_MAP.get(dt.strftime('%A'), '')
-        title = f"💰 重点财报 | {date_str} ({weekday_cn})"
+        title = f"重点财报 ({month_day}/{weekday_cn})"
     except:
-        title = f"💰 重点财报 ({date_str})"
+        title = f"重点财报 ({date_str})"
 
-    # 使用金黄色
     embed = discord.Embed(title=title, color=0xf1c40f)
-    # 增加一个财报相关的缩略图，提升高级感
-    embed.set_thumbnail(url="https://img.icons8.com/fluency/96/bullish.png")
     
-    # === 视觉优化核心函数 ===
-    def build_stylish_list(items):
+    # 2. 蓝色字体列表生成 (使用链接语法实现变蓝)
+    def build_blue_list(items):
         line_list = []
         for s in items:
-            # 热门股显示火焰，普通股不显示图标，保持干净
-            prefix = "🔥" if s['is_hot'] else "" 
-            # 使用代码块 ` ` 包裹，制作成“标签”样式，并在两边加空格让它变宽一点
-            symbol_text = f"` {s['symbol']} `"
-            
-            line_list.append(f"{prefix}{symbol_text}")
-        
-        # 使用全角空格或宽间距分隔
-        return "　".join(line_list) 
+            icon = "🔥" if s['is_hot'] else ""
+            # Discord 蓝色字体 hack：使用 Markdown 链接
+            symbol_text = f"[{s['symbol']}](https://finance.yahoo.com/quote/{s['symbol']})"
+            line_list.append(f"{icon}{symbol_text}")
+        return " , ".join(line_list)
 
     bmo = [s for s in stocks if s['time'] == 'bmo']
     amc = [s for s in stocks if s['time'] == 'amc']
     other = [s for s in stocks if s['time'] == 'other']
 
-    # 上下排列布局 (inline=False)
+    # 3. 上下布局 (inline=False)，去英文
     if bmo: 
-        val = build_stylish_list(bmo)
-        # 防截断
+        val = build_blue_list(bmo)
         if len(val) > 1024: val = val[:1020] + "..."
-        embed.add_field(name="☀️ 盘前 (Before Open)", value=val, inline=False)
+        embed.add_field(name="☀️ 盘前", value=val, inline=False)
     
     if amc: 
-        val = build_stylish_list(amc)
+        val = build_blue_list(amc)
         if len(val) > 1024: val = val[:1020] + "..."
-        embed.add_field(name="🌙 盘后 (After Close)", value=val, inline=False)
+        embed.add_field(name="🌙 盘后", value=val, inline=False)
     
     if other:
-        val = build_stylish_list(other)
+        val = build_blue_list(other)
         if len(val) > 1024: val = val[:1020] + "..."
-        embed.add_field(name="🕒 时间未定 / 待定", value=val, inline=False)
+        embed.add_field(name="🕒 时间未定", value=val, inline=False)
 
-    embed.set_footer(text="数据来源: Nasdaq Official • 智能分类")
+    # 4. 极简 Footer
+    embed.set_footer(text="数据来源: Nasdaq")
     return embed
 
 # ================== 9. 定时任务与事件 ==================
