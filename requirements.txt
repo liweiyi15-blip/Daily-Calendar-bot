@@ -3,3 +3,4 @@ aiohttp
 pytz
 google-cloud-translate
 beautifulsoup4
+curl_cffi
