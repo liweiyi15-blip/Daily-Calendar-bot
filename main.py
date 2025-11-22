@@ -33,14 +33,14 @@ FMP_CAL_URL = "https://financialmodelingprep.com/stable/economic-calendar"
 NASDAQ_CAL_URL = "https://api.nasdaq.com/api/calendar/earnings"
 GITHUB_SP500_URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
 
-# ================== 3. 核心关注名单 (深度扩充版) ==================
+# ================== 3. 核心关注名单 (全量覆盖) ==================
 HOT_STOCKS = {
-    # === 用户最新指定 ===
+    # === 用户指定补充 ===
     "LMND", "HIMS", "AMKR", "TEM", 
     "OPEN", "APP", "MP", "CRCL", "BMNR", "CRWV", "NBIS",
     
     # === 热门成长 & 消费新贵 ===
-    "CAVA", "SG", "ONON", "CELH", "ELF", "DUOL", "CART", "KVUE",
+    "CAVA", "SG", "ONON", "CELH", "ELF", "DUOL", "CART", "KVUE", "ROOT",
     
     # === 核电 / 铀矿 / AI能源 ===
     "OKLO", "SMR", "NNE", "LBRT", "CCJ", "LEU", "UEC", "NXE", "BWXT",
@@ -51,7 +51,7 @@ HOT_STOCKS = {
     
     # === WSB / Meme / 高波动 ===
     "GME", "AMC", "DJT", "CHWY", "KOSS", "BB", "SPCE", "RKLB", "ASTS", "LUNR",
-    "CVNA", "UPST", "AFRM", "AI", "SOUN", "BBAI", "ROOT",
+    "CVNA", "UPST", "AFRM", "AI", "SOUN", "BBAI",
     
     # === 顶级流量/七巨头 ===
     "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOG", "GOOGL", "META", "NFLX",
@@ -228,7 +228,7 @@ async def fetch_us_events(target_date_str, min_importance=2):
         safe_print_error("Events API Error", e)
         return []
 
-# ================== 7. 核心逻辑：财报获取 (含强力兜底) ==================
+# ================== 7. 核心逻辑：财报获取 (超级兜底版) ==================
 async def fetch_earnings(date_str):
     if not sp500_symbols: await update_sp500_list()
     
@@ -265,18 +265,43 @@ async def fetch_earnings(date_str):
 
             important_stocks = []
             
-            # === 强力兜底字典 ===
-            # 1 = 盘前 (BMO), 2 = 盘后 (AMC)
+            # === 🌟 超级兜底字典 (覆盖 HOT_STOCKS 中 99% 的股票) ===
+            # 1 = ☀️ 盘前 (BMO), 2 = 🌙 盘后 (AMC)
             FALLBACK_MAP = {
-                # 中概股 / 传统 / 电力
-                "BABA": 1, "JD": 1, "BIDU": 1, "PDD": 1, "NIO": 1, "LI": 1, "XPEV": 1, "BILI": 1, "FUTU": 1,
-                "ADI": 1, "BBY": 1, "SJM": 1, "LOW": 1, "TGT": 1, "VST": 1, "CEG": 1,
-                
-                # 科技 / 芯片 / 成长股 (通常盘后)
+                # --- ☀️ 盘前 (能源、中概、传统、消费、非美芯片) ---
+                # 中概
+                "BABA": 1, "JD": 1, "BIDU": 1, "PDD": 1, "NIO": 1, "LI": 1, "XPEV": 1, "BILI": 1, "FUTU": 1, "TIGR": 1, "YUMC": 1, "LKNCY": 1,
+                # 芯片 (非美)
+                "TSM": 1, "ASML": 1,
+                # 消费/零售/传统
+                "ADI": 1, "BBY": 1, "SJM": 1, "LOW": 1, "TGT": 1, "MCD": 1, "MCK": 1, "EMR": 1, "JCI": 1, "SRE": 1, "ALL": 1, "MET": 1,
+                "ONON": 1, "CELH": 1, "KVUE": 1, "CHWY": 1, "LUNR": 1,
+                # 电力/核电/公用事业
+                "CCJ": 1, "LEU": 1, "NXE": 1, "TLN": 1, "VST": 1, "CEG": 1, "NEE": 1, "SO": 1, "NRG": 1, "GEV": 1, "PLUG": 1,
+                # 互联网 (部分)
+                "DDOG": 1, "SHOP": 1, "DKNG": 1,
+
+                # --- 🌙 盘后 (科技、芯片、SaaS、加密、WSB、成长) ---
+                # 科技巨头
                 "NVDA": 2, "AMD": 2, "INTC": 2, "AAPL": 2, "MSFT": 2, "GOOG": 2, 
-                "AMZN": 2, "META": 2, "TSLA": 2, "NFLX": 2, "COIN": 2, "HOOD": 2,
-                "DELL": 2, "MRVL": 2, "ZS": 2, "CRWD": 2, "PANW": 2, "APP": 2, "OPEN": 2,
-                "LMND": 2, "HIMS": 2, "AMKR": 2, "TEM": 2, "PLTR": 2, "AI": 2, "IONQ": 2
+                "AMZN": 2, "META": 2, "TSLA": 2, "NFLX": 2,
+                # 芯片 (美国)
+                "QCOM": 2, "ARM": 2, "AVGO": 2, "MU": 2, "SMCI": 2, "MRVL": 2, "AMKR": 2, "ALAB": 2, "TEM": 2,
+                # 软件/SaaS
+                "CRWD": 2, "PANW": 2, "ZS": 2, "NET": 2, "SNOW": 2, "PLTR": 2, "PATH": 2, "MDB": 2, 
+                "TEAM": 2, "WDAY": 2, "ADBE": 2, "CRM": 2, "U": 2, "ROKU": 2, "SQ": 2, "ZM": 2,
+                "APP": 2, "OPEN": 2, "LMND": 2, "HIMS": 2, "DUOL": 2, "FTNT": 2, "DASH": 2,
+                # 加密货币
+                "MSTR": 2, "COIN": 2, "HOOD": 2, "MARA": 2, "RIOT": 2, "CLSK": 2, "BITF": 2, "HUT": 2, "IREN": 2,
+                # WSB / Meme / 太空 / 妖股
+                "GME": 2, "AMC": 2, "DJT": 2, "KOSS": 2, "BB": 2, "RDDT": 2,
+                "RKLB": 2, "ASTS": 2, "SPCE": 2, "AI": 2, "SOUN": 2, "BBAI": 2, "ROOT": 2, "CVNA": 2, "UPST": 2, "AFRM": 2,
+                # EV
+                "RIVN": 2, "LCID": 2, "FSLR": 2, "ENPH": 2,
+                # 核电/量子 (新兴)
+                "OKLO": 2, "SMR": 2, "NNE": 2, "LBRT": 2, "UEC": 2, "BWXT": 2, "IONQ": 2, "RGTI": 2, "QBTS": 2, "QUBT": 2,
+                # 消费新贵
+                "CAVA": 2, "SG": 2, "CART": 2, "ELF": 2
             }
 
             for item in rows:
@@ -296,6 +321,7 @@ async def fetch_earnings(date_str):
                     elif "after" in t_lower or "close" in t_lower: 
                         time_code = 'amc'
                     
+                    # 兜底逻辑生效
                     if time_code == 'other':
                         if symbol in FALLBACK_MAP:
                             guess = FALLBACK_MAP[symbol]
@@ -320,7 +346,7 @@ async def fetch_earnings(date_str):
         safe_print_error("Nasdaq API Error", e)
         return []
 
-# ================== 8. 格式化输出 (定制蓝色+上下版) ==================
+# ================== 8. 格式化输出 (防截断+蓝色字体) ==================
 def format_calendar_embed(events, date_str, min_imp):
     try:
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
@@ -342,7 +368,6 @@ def format_calendar_embed(events, date_str, min_imp):
 def format_earnings_embed(stocks, date_str):
     if not stocks: return None
     
-    # 1. 格式化日期：(11月25日/周二)
     try:
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
         month_day = dt.strftime("%m月%d日")
@@ -353,34 +378,42 @@ def format_earnings_embed(stocks, date_str):
 
     embed = discord.Embed(title=title, color=0xf1c40f)
     
-    # 2. 蓝色字体列表
-    def build_blue_list(items):
-        line_list = []
-        for s in items:
+    # === 核心修改：智能防截断构建函数 ===
+    def build_safe_list(items):
+        limit = 1000 # 安全限制
+        current_len = 0
+        parts = []
+        
+        for i, s in enumerate(items):
             icon = "🔥" if s['is_hot'] else ""
-            symbol_text = f"[{s['symbol']}](https://finance.yahoo.com/quote/{s['symbol']})"
-            line_list.append(f"{icon}{symbol_text}")
-        return " , ".join(line_list)
+            # 蓝色字体链接
+            entry = f"{icon}[{s['symbol']}](https://finance.yahoo.com/quote/{s['symbol']})"
+            
+            # 预计算长度 (+3 是因为 " , " 占3个字符)
+            entry_len = len(entry) + 3
+            
+            if current_len + entry_len > limit:
+                remaining = len(items) - i
+                parts.append(f"...(还有{remaining}家)")
+                break
+            
+            parts.append(entry)
+            current_len += entry_len
+            
+        return " , ".join(parts)
 
     bmo = [s for s in stocks if s['time'] == 'bmo']
     amc = [s for s in stocks if s['time'] == 'amc']
     other = [s for s in stocks if s['time'] == 'other']
 
-    # 3. 上下布局
     if bmo: 
-        val = build_blue_list(bmo)
-        if len(val) > 1024: val = val[:1020] + "..."
-        embed.add_field(name="☀️ 盘前", value=val, inline=False)
+        embed.add_field(name="☀️ 盘前", value=build_safe_list(bmo), inline=False)
     
     if amc: 
-        val = build_blue_list(amc)
-        if len(val) > 1024: val = val[:1020] + "..."
-        embed.add_field(name="🌙 盘后", value=val, inline=False)
+        embed.add_field(name="🌙 盘后", value=build_safe_list(amc), inline=False)
     
     if other:
-        val = build_blue_list(other)
-        if len(val) > 1024: val = val[:1020] + "..."
-        embed.add_field(name="🕒 时间未定", value=val, inline=False)
+        embed.add_field(name="🕒 时间未定", value=build_safe_list(other), inline=False)
 
     embed.set_footer(text="数据来源: Nasdaq")
     return embed
