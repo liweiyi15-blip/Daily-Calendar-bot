@@ -33,17 +33,44 @@ FMP_CAL_URL = "https://financialmodelingprep.com/stable/economic-calendar"
 NASDAQ_CAL_URL = "https://api.nasdaq.com/api/calendar/earnings"
 GITHUB_SP500_URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
 
-# ================== 3. 核心关注名单 (带🔥) ==================
+# ================== 3. 核心关注名单 (深度扩充版) ==================
 HOT_STOCKS = {
-    "RKLB", "COIN", "NVDA", "TSLA", "HOOD", "PLTR",
+    # === 用户最新指定 ===
+    "LMND", "HIMS", "AMKR", "TEM", 
+    "OPEN", "APP", "MP", "CRCL", "BMNR", "CRWV", "NBIS",
+    
+    # === 热门成长 & 消费新贵 ===
+    "CAVA", "SG", "ONON", "CELH", "ELF", "DUOL", "CART", "KVUE",
+    
+    # === 核电 / 铀矿 / AI能源 ===
+    "OKLO", "SMR", "NNE", "LBRT", "CCJ", "LEU", "UEC", "NXE", "BWXT",
+    "VST", "CEG", "NRG", "GEV", "TLN", "NEE", "SO",
+    
+    # === 量子计算 & 硬科技 ===
+    "IONQ", "RGTI", "QBTS", "QUBT", "ARQQ", "ALAB", "RDDT",
+    
+    # === WSB / Meme / 高波动 ===
+    "GME", "AMC", "DJT", "CHWY", "KOSS", "BB", "SPCE", "RKLB", "ASTS", "LUNR",
+    "CVNA", "UPST", "AFRM", "AI", "SOUN", "BBAI", "ROOT",
+    
+    # === 顶级流量/七巨头 ===
+    "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOG", "GOOGL", "META", "NFLX",
+    
+    # === 芯片/半导体 ===
     "AMD", "INTC", "TSM", "ASML", "ARM", "AVGO", "QCOM", "MU", "SMCI", "MRVL",
-    "AAPL", "MSFT", "AMZN", "GOOG", "GOOGL", "META", "NFLX", "CRM", "ADBE", "ORCL",
-    "U", "DKNG", "ROKU", "SHOP", "SQ", "ZM", "CRWD", "NET", "SNOW", "DDOG", "TEAM", "ZS", "PANW",
-    "MSTR", "MARA", "RIOT", "CLSK",
-    "ASTS", "SPCE", "IONQ", "RIVN", "LCID", "NIO", "XPEV", "LI", "ENPH", "CVNA",
-    "SOFI", "UPST", "AFRM", "PYPL",
-    "GME", "AMC", "RDDT", "DJT",
-    "BABA", "PDD", "JD", "BIDU", "BILI", "FUTU"
+    
+    # === 加密货币 ===
+    "MSTR", "COIN", "MARA", "RIOT", "CLSK", "HOOD", "BITF", "HUT", "IREN",
+    
+    # === SaaS / 云计算 ===
+    "CRWD", "PANW", "ZS", "NET", "DDOG", "SNOW", "PLTR", "PATH", "MDB", 
+    "TEAM", "WDAY", "ADBE", "CRM", "U", "DKNG", "ROKU", "SHOP", "SQ", "ZM",
+    
+    # === 新能源汽车 ===
+    "RIVN", "LCID", "NIO", "XPEV", "LI", "FSLR", "ENPH", "PLUG",
+    
+    # === 热门中概 ===
+    "BABA", "PDD", "JD", "BIDU", "BILI", "FUTU", "TIGR", "YUMC", "LKNCY"
 }
 
 FALLBACK_GIANTS = {"NVDA", "AAPL", "MSFT", "AMZN", "TSLA", "GOOG", "META"}
@@ -238,12 +265,18 @@ async def fetch_earnings(date_str):
 
             important_stocks = []
             
+            # === 强力兜底字典 ===
+            # 1 = 盘前 (BMO), 2 = 盘后 (AMC)
             FALLBACK_MAP = {
-                "BABA": 1, "JD": 1, "BIDU": 1, "PDD": 1, "NIO": 1, "LI": 1, "XPEV": 1,
-                "BILI": 1, "FUTU": 1, "ADI": 1, "BBY": 1, "SJM": 1, "LOW": 1, "TGT": 1,
+                # 中概股 / 传统 / 电力
+                "BABA": 1, "JD": 1, "BIDU": 1, "PDD": 1, "NIO": 1, "LI": 1, "XPEV": 1, "BILI": 1, "FUTU": 1,
+                "ADI": 1, "BBY": 1, "SJM": 1, "LOW": 1, "TGT": 1, "VST": 1, "CEG": 1,
+                
+                # 科技 / 芯片 / 成长股 (通常盘后)
                 "NVDA": 2, "AMD": 2, "INTC": 2, "AAPL": 2, "MSFT": 2, "GOOG": 2, 
                 "AMZN": 2, "META": 2, "TSLA": 2, "NFLX": 2, "COIN": 2, "HOOD": 2,
-                "DELL": 2, "MRVL": 2, "ZS": 2, "CRWD": 2, "PANW": 2
+                "DELL": 2, "MRVL": 2, "ZS": 2, "CRWD": 2, "PANW": 2, "APP": 2, "OPEN": 2,
+                "LMND": 2, "HIMS": 2, "AMKR": 2, "TEM": 2, "PLTR": 2, "AI": 2, "IONQ": 2
             }
 
             for item in rows:
@@ -287,7 +320,7 @@ async def fetch_earnings(date_str):
         safe_print_error("Nasdaq API Error", e)
         return []
 
-# ================== 8. 格式化输出 (定制优化版) ==================
+# ================== 8. 格式化输出 (定制蓝色+上下版) ==================
 def format_calendar_embed(events, date_str, min_imp):
     try:
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
@@ -320,12 +353,11 @@ def format_earnings_embed(stocks, date_str):
 
     embed = discord.Embed(title=title, color=0xf1c40f)
     
-    # 2. 蓝色字体列表生成 (使用链接语法实现变蓝)
+    # 2. 蓝色字体列表
     def build_blue_list(items):
         line_list = []
         for s in items:
             icon = "🔥" if s['is_hot'] else ""
-            # Discord 蓝色字体 hack：使用 Markdown 链接
             symbol_text = f"[{s['symbol']}](https://finance.yahoo.com/quote/{s['symbol']})"
             line_list.append(f"{icon}{symbol_text}")
         return " , ".join(line_list)
@@ -334,7 +366,7 @@ def format_earnings_embed(stocks, date_str):
     amc = [s for s in stocks if s['time'] == 'amc']
     other = [s for s in stocks if s['time'] == 'other']
 
-    # 3. 上下布局 (inline=False)，去英文
+    # 3. 上下布局
     if bmo: 
         val = build_blue_list(bmo)
         if len(val) > 1024: val = val[:1020] + "..."
@@ -350,7 +382,6 @@ def format_earnings_embed(stocks, date_str):
         if len(val) > 1024: val = val[:1020] + "..."
         embed.add_field(name="🕒 时间未定", value=val, inline=False)
 
-    # 4. 极简 Footer
     embed.set_footer(text="数据来源: Nasdaq")
     return embed
 
