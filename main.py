@@ -136,18 +136,30 @@ def save_settings():
 def clean_title(title):
     return re.sub(r'\s*\([^)]*\)', '', str(title)).strip()
 
-def translate_finance_text(text, target_lang='zh'):
+# === 核心修复：异步封装翻译函数，防止阻塞 ===
+async def translate_finance_text(text, target_lang='zh'):
     if not text or not translate_client: return str(text).strip()
     text = str(text).strip()
     if re.match(r'^-?\d+(\.\d+)?%?$', text): return text
+    
+    # 将同步的 Google API 调用放入线程池运行
     try:
-        if translate_client.detect_language(text)['language'].startswith('zh'): return text
-        result = translate_client.translate(text, source_language='en', target_language=target_lang)
-        t = result['translatedText']
+        def _do_translate():
+            # 内部检测
+            if translate_client.detect_language(text)['language'].startswith('zh'):
+                return text
+            result = translate_client.translate(text, source_language='en', target_language=target_lang)
+            return result['translatedText']
+
+        # 使用 asyncio.to_thread (Python 3.9+) 防止卡死
+        t = await asyncio.to_thread(_do_translate)
+        
         for abbr in ['CPI', 'PPI', 'GDP', 'FOMC', 'Fed', 'YoY', 'MoM']:
             t = re.sub(rf'\b{abbr}\b', abbr, t, flags=re.IGNORECASE)
         return t.strip()
-    except: return text
+    except Exception as e:
+        # 出错不打印堆栈，直接返回原文，避免日志爆炸
+        return text
 
 # ================== 5. 核心逻辑：更新白名单 ==================
 async def update_sp500_list():
@@ -193,6 +205,8 @@ async def fetch_us_events(target_date_str, min_importance=2):
         start = BJT.localize(datetime.datetime.combine(target_date, datetime.time(8, 0)))
         end = start + datetime.timedelta(days=1)
         
+        # 预筛选，减少后续循环次数
+        valid_items = []
         for item in data:
             if item.get("country") != "US": continue
             imp = IMPACT_MAP.get(item.get("impact", "Low").capitalize(), 1)
@@ -200,20 +214,37 @@ async def fetch_us_events(target_date_str, min_importance=2):
             
             dt_str = item.get("date")
             if not dt_str: continue
-            utc = UTC.localize(datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S"))
-            bjt = utc.astimezone(BJT)
-            if not (start <= bjt < end): continue
+            
+            try:
+                utc = UTC.localize(datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S"))
+                bjt = utc.astimezone(BJT)
+                if start <= bjt < end:
+                    item['_bjt'] = bjt
+                    item['_et'] = utc.astimezone(ET)
+                    item['_imp'] = imp
+                    valid_items.append(item)
+            except: continue
 
-            et = utc.astimezone(ET)
+        # 处理翻译和构建对象
+        for item in valid_items:
+            bjt = item['_bjt']
+            et = item['_et']
+            imp = item['_imp']
+            
             time_str = f"{bjt.strftime('%H:%M')} ({et.strftime('%H:%M')} ET)"
             title = clean_title(item.get("event", ""))
+            
+            # === 这里使用 await 调用修复后的异步翻译 ===
+            trans_title = await translate_finance_text(title)
+            trans_forecast = await translate_finance_text(item.get("estimate", "") or "—")
+            trans_prev = await translate_finance_text(item.get("previous", "") or "—")
             
             events.append({
                 "time": time_str,
                 "importance": "★" * imp,
-                "title": translate_finance_text(title),
-                "forecast": translate_finance_text(item.get("estimate", "") or "—"),
-                "previous": translate_finance_text(item.get("previous", "") or "—"),
+                "title": trans_title,
+                "forecast": trans_forecast,
+                "previous": trans_prev,
                 "orig_title": title,
                 "bjt_timestamp": bjt
             })
@@ -266,7 +297,6 @@ async def fetch_earnings(date_str):
             important_stocks = []
             
             # === 🌟 超级兜底字典 (覆盖 HOT_STOCKS 中 99% 的股票) ===
-            # 1 = ☀️ 盘前 (BMO), 2 = 🌙 盘后 (AMC)
             FALLBACK_MAP = {
                 # --- ☀️ 盘前 (能源、中概、传统、消费、非美芯片) ---
                 # 中概
@@ -346,24 +376,43 @@ async def fetch_earnings(date_str):
         safe_print_error("Nasdaq API Error", e)
         return []
 
-# ================== 8. 格式化输出 (防截断+蓝色字体) ==================
+# ================== 8. 格式化输出 (防截断 + 自动分页) ==================
 def format_calendar_embed(events, date_str, min_imp):
     try:
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
         month_day = dt.strftime("%m月%d日")
         weekday_cn = WEEKDAY_MAP.get(dt.strftime('%A'), '')
-        title = f"今日热点 ({month_day}/{weekday_cn})"
+        base_title = f"今日热点 ({month_day}/{weekday_cn})"
     except:
-        title = f"今日热点 ({date_str})"
+        base_title = f"今日热点 ({date_str})"
 
-    if not events: return [discord.Embed(title=title, description="无重要事件", color=0x00FF00)]
+    if not events: return [discord.Embed(title=base_title, description="无重要事件", color=0x00FF00)]
     
-    embed = discord.Embed(title=title, color=0x00FF00)
-    for e in events:
-        val = f"影响: {e['importance']}" if any(k in e['orig_title'] for k in SPEECH_KEYWORDS) else \
-              f"影响: {e['importance']} | 预期: {e['forecast']} | 前值: {e['previous']}"
-        embed.add_field(name=f"{e['time']} {e['title']}", value=val, inline=False)
-    return [embed]
+    # === 核心修复：自动分页 (每25个事件一组) ===
+    # Discord 限制每个 Embed 最多 25 个 Field
+    embeds = []
+    chunk_size = 25
+    
+    for i in range(0, len(events), chunk_size):
+        chunk = events[i:i + chunk_size]
+        
+        # 如果有分页，标题加页码
+        title = base_title
+        if len(events) > chunk_size:
+            page = (i // chunk_size) + 1
+            total_pages = (len(events) + chunk_size - 1) // chunk_size
+            title = f"{base_title} ({page}/{total_pages})"
+            
+        embed = discord.Embed(title=title, color=0x00FF00)
+        
+        for e in chunk:
+            val = f"影响: {e['importance']}" if any(k in e['orig_title'] for k in SPEECH_KEYWORDS) else \
+                  f"影响: {e['importance']} | 预期: {e['forecast']} | 前值: {e['previous']}"
+            embed.add_field(name=f"{e['time']} {e['title']}", value=val, inline=False)
+        
+        embeds.append(embed)
+        
+    return embeds
 
 def format_earnings_embed(stocks, date_str):
     if not stocks: return None
@@ -378,7 +427,7 @@ def format_earnings_embed(stocks, date_str):
 
     embed = discord.Embed(title=title, color=0xf1c40f)
     
-    # === 核心修改：智能防截断构建函数 ===
+    # === 智能防截断构建函数 ===
     def build_safe_list(items):
         limit = 1000 # 安全限制
         current_len = 0
@@ -433,7 +482,10 @@ async def main_loop():
                 ch = bot.get_channel(conf.get('channel_id'))
                 if ch:
                     evts = await fetch_us_events(today, conf.get('min_importance', 2))
-                    for em in format_calendar_embed(evts, today, conf.get('min_importance', 2)): await ch.send(embed=em)
+                    # format_calendar_embed 现在返回一个列表，需要循环发送
+                    embed_list = format_calendar_embed(evts, today, conf.get('min_importance', 2))
+                    for em in embed_list:
+                        await ch.send(embed=em)
 
     # 20:00 财报
     elif now.hour == 20 and 0 <= now.minute < 5:
@@ -485,7 +537,9 @@ async def test_push(interaction: discord.Interaction):
     await interaction.response.defer()
     today = datetime.datetime.now(BJT).strftime("%Y-%m-%d")
     evts = await fetch_us_events(today, 2)
-    for em in format_calendar_embed(evts, today, 2): await interaction.followup.send(embed=em)
+    embed_list = format_calendar_embed(evts, today, 2)
+    for em in embed_list:
+        await interaction.followup.send(embed=em)
 
 @bot.tree.command(name="set_importance", description="设置宏观事件最低星级")
 @discord.app_commands.choices(level=[
