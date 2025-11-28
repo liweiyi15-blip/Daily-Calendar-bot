@@ -136,35 +136,31 @@ def save_settings():
 def clean_title(title):
     return re.sub(r'\s*\([^)]*\)', '', str(title)).strip()
 
-# === 核心修复：异步封装翻译函数，防止阻塞 ===
+# === 异步翻译函数 ===
 async def translate_finance_text(text, target_lang='zh'):
     if not text or not translate_client: return str(text).strip()
     text = str(text).strip()
     if re.match(r'^-?\d+(\.\d+)?%?$', text): return text
     
-    # 将同步的 Google API 调用放入线程池运行
     try:
         def _do_translate():
-            # 内部检测
             if translate_client.detect_language(text)['language'].startswith('zh'):
                 return text
             result = translate_client.translate(text, source_language='en', target_language=target_lang)
             return result['translatedText']
 
-        # 使用 asyncio.to_thread (Python 3.9+) 防止卡死
         t = await asyncio.to_thread(_do_translate)
         
         for abbr in ['CPI', 'PPI', 'GDP', 'FOMC', 'Fed', 'YoY', 'MoM']:
             t = re.sub(rf'\b{abbr}\b', abbr, t, flags=re.IGNORECASE)
         return t.strip()
     except Exception as e:
-        # 出错不打印堆栈，直接返回原文，避免日志爆炸
         return text
 
 # ================== 5. 核心逻辑：更新白名单 ==================
 async def update_sp500_list():
     global sp500_symbols
-    log("🔄 正在从 GitHub 更新 S&P 500 名单...")
+    # log("🔄 正在从 GitHub 更新 S&P 500 名单...") # 减少日志噪音，除非你需要
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(GITHUB_SP500_URL, timeout=15) as resp:
@@ -178,12 +174,10 @@ async def update_sp500_list():
                     
                     if len(new_list) > 400:
                         sp500_symbols = new_list
-                        log(f"✅ S&P 500 更新成功: {len(sp500_symbols)} 只")
+                        # log(f"✅ S&P 500 更新成功: {len(sp500_symbols)} 只")
                     else:
-                        log("⚠️ GitHub 数据异常，使用备用名单")
                         sp500_symbols.update(FALLBACK_GIANTS)
                 else:
-                    log(f"⚠️ GitHub 访问失败: {resp.status}")
                     sp500_symbols.update(FALLBACK_GIANTS)
         except Exception as e:
             safe_print_error("更新名单失败", e)
@@ -205,7 +199,6 @@ async def fetch_us_events(target_date_str, min_importance=2):
         start = BJT.localize(datetime.datetime.combine(target_date, datetime.time(8, 0)))
         end = start + datetime.timedelta(days=1)
         
-        # 预筛选，减少后续循环次数
         valid_items = []
         for item in data:
             if item.get("country") != "US": continue
@@ -225,7 +218,6 @@ async def fetch_us_events(target_date_str, min_importance=2):
                     valid_items.append(item)
             except: continue
 
-        # 处理翻译和构建对象
         for item in valid_items:
             bjt = item['_bjt']
             et = item['_et']
@@ -234,7 +226,6 @@ async def fetch_us_events(target_date_str, min_importance=2):
             time_str = f"{bjt.strftime('%H:%M')} ({et.strftime('%H:%M')} ET)"
             title = clean_title(item.get("event", ""))
             
-            # === 这里使用 await 调用修复后的异步翻译 ===
             trans_title = await translate_finance_text(title)
             trans_forecast = await translate_finance_text(item.get("estimate", "") or "—")
             trans_prev = await translate_finance_text(item.get("previous", "") or "—")
@@ -296,41 +287,27 @@ async def fetch_earnings(date_str):
 
             important_stocks = []
             
-            # === 🌟 超级兜底字典 (覆盖 HOT_STOCKS 中 99% 的股票) ===
             FALLBACK_MAP = {
-                # --- ☀️ 盘前 (能源、中概、传统、消费、非美芯片) ---
-                # 中概
+                # --- ☀️ 盘前 ---
                 "BABA": 1, "JD": 1, "BIDU": 1, "PDD": 1, "NIO": 1, "LI": 1, "XPEV": 1, "BILI": 1, "FUTU": 1, "TIGR": 1, "YUMC": 1, "LKNCY": 1,
-                # 芯片 (非美)
                 "TSM": 1, "ASML": 1,
-                # 消费/零售/传统
                 "ADI": 1, "BBY": 1, "SJM": 1, "LOW": 1, "TGT": 1, "MCD": 1, "MCK": 1, "EMR": 1, "JCI": 1, "SRE": 1, "ALL": 1, "MET": 1,
                 "ONON": 1, "CELH": 1, "KVUE": 1, "CHWY": 1, "LUNR": 1,
-                # 电力/核电/公用事业
                 "CCJ": 1, "LEU": 1, "NXE": 1, "TLN": 1, "VST": 1, "CEG": 1, "NEE": 1, "SO": 1, "NRG": 1, "GEV": 1, "PLUG": 1,
-                # 互联网 (部分)
                 "DDOG": 1, "SHOP": 1, "DKNG": 1,
 
-                # --- 🌙 盘后 (科技、芯片、SaaS、加密、WSB、成长) ---
-                # 科技巨头
+                # --- 🌙 盘后 ---
                 "NVDA": 2, "AMD": 2, "INTC": 2, "AAPL": 2, "MSFT": 2, "GOOG": 2, 
                 "AMZN": 2, "META": 2, "TSLA": 2, "NFLX": 2,
-                # 芯片 (美国)
                 "QCOM": 2, "ARM": 2, "AVGO": 2, "MU": 2, "SMCI": 2, "MRVL": 2, "AMKR": 2, "ALAB": 2, "TEM": 2,
-                # 软件/SaaS
                 "CRWD": 2, "PANW": 2, "ZS": 2, "NET": 2, "SNOW": 2, "PLTR": 2, "PATH": 2, "MDB": 2, 
                 "TEAM": 2, "WDAY": 2, "ADBE": 2, "CRM": 2, "U": 2, "ROKU": 2, "SQ": 2, "ZM": 2,
                 "APP": 2, "OPEN": 2, "LMND": 2, "HIMS": 2, "DUOL": 2, "FTNT": 2, "DASH": 2,
-                # 加密货币
                 "MSTR": 2, "COIN": 2, "HOOD": 2, "MARA": 2, "RIOT": 2, "CLSK": 2, "BITF": 2, "HUT": 2, "IREN": 2,
-                # WSB / Meme / 太空 / 妖股
                 "GME": 2, "AMC": 2, "DJT": 2, "KOSS": 2, "BB": 2, "RDDT": 2,
                 "RKLB": 2, "ASTS": 2, "SPCE": 2, "AI": 2, "SOUN": 2, "BBAI": 2, "ROOT": 2, "CVNA": 2, "UPST": 2, "AFRM": 2,
-                # EV
                 "RIVN": 2, "LCID": 2, "FSLR": 2, "ENPH": 2,
-                # 核电/量子 (新兴)
                 "OKLO": 2, "SMR": 2, "NNE": 2, "LBRT": 2, "UEC": 2, "BWXT": 2, "IONQ": 2, "RGTI": 2, "QBTS": 2, "QUBT": 2,
-                # 消费新贵
                 "CAVA": 2, "SG": 2, "CART": 2, "ELF": 2
             }
 
@@ -351,13 +328,9 @@ async def fetch_earnings(date_str):
                     elif "after" in t_lower or "close" in t_lower: 
                         time_code = 'amc'
                     
-                    # 兜底逻辑生效
-                    if time_code == 'other':
-                        if symbol in FALLBACK_MAP:
-                            guess = FALLBACK_MAP[symbol]
-                            time_code = 'bmo' if guess == 1 else 'amc'
-                        else:
-                            pass
+                    if time_code == 'other' and symbol in FALLBACK_MAP:
+                        guess = FALLBACK_MAP[symbol]
+                        time_code = 'bmo' if guess == 1 else 'amc'
 
                     important_stocks.append({
                         'symbol': symbol,
@@ -388,15 +361,11 @@ def format_calendar_embed(events, date_str, min_imp):
 
     if not events: return [discord.Embed(title=base_title, description="无重要事件", color=0x00FF00)]
     
-    # === 核心修复：自动分页 (每25个事件一组) ===
-    # Discord 限制每个 Embed 最多 25 个 Field
     embeds = []
     chunk_size = 25
     
     for i in range(0, len(events), chunk_size):
         chunk = events[i:i + chunk_size]
-        
-        # 如果有分页，标题加页码
         title = base_title
         if len(events) > chunk_size:
             page = (i // chunk_size) + 1
@@ -427,18 +396,14 @@ def format_earnings_embed(stocks, date_str):
 
     embed = discord.Embed(title=title, color=0xf1c40f)
     
-    # === 智能防截断构建函数 ===
     def build_safe_list(items):
-        limit = 1000 # 安全限制
+        limit = 1000 
         current_len = 0
         parts = []
         
         for i, s in enumerate(items):
             icon = "🔥" if s['is_hot'] else ""
-            # 蓝色字体链接
             entry = f"{icon}[{s['symbol']}](https://finance.yahoo.com/quote/{s['symbol']})"
-            
-            # 预计算长度 (+3 是因为 " , " 占3个字符)
             entry_len = len(entry) + 3
             
             if current_len + entry_len > limit:
@@ -455,14 +420,9 @@ def format_earnings_embed(stocks, date_str):
     amc = [s for s in stocks if s['time'] == 'amc']
     other = [s for s in stocks if s['time'] == 'other']
 
-    if bmo: 
-        embed.add_field(name="☀️ 盘前", value=build_safe_list(bmo), inline=False)
-    
-    if amc: 
-        embed.add_field(name="🌙 盘后", value=build_safe_list(amc), inline=False)
-    
-    if other:
-        embed.add_field(name="🕒 时间未定", value=build_safe_list(other), inline=False)
+    if bmo: embed.add_field(name="☀️ 盘前", value=build_safe_list(bmo), inline=False)
+    if amc: embed.add_field(name="🌙 盘后", value=build_safe_list(amc), inline=False)
+    if other: embed.add_field(name="🕒 时间未定", value=build_safe_list(other), inline=False)
 
     embed.set_footer(text="数据来源: Nasdaq")
     return embed
@@ -471,6 +431,11 @@ def format_earnings_embed(stocks, date_str):
 @tasks.loop(minutes=1)
 async def main_loop():
     now = datetime.datetime.now(BJT)
+    
+    # === 新增：每 5 分钟打印一次心跳日志 ===
+    if now.minute % 5 == 0:
+        log(f"💓 [系统心跳] Bot 运行正常 | 时间: {now.strftime('%H:%M')}")
+
     # 08:00 宏观
     if now.hour == 8 and 0 <= now.minute < 5:
         today = now.strftime("%Y-%m-%d")
@@ -482,7 +447,6 @@ async def main_loop():
                 ch = bot.get_channel(conf.get('channel_id'))
                 if ch:
                     evts = await fetch_us_events(today, conf.get('min_importance', 2))
-                    # format_calendar_embed 现在返回一个列表，需要循环发送
                     embed_list = format_calendar_embed(evts, today, conf.get('min_importance', 2))
                     for em in embed_list:
                         await ch.send(embed=em)
